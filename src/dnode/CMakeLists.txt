@@ -1,0 +1,47 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
+PROJECT(TDengine)
+
+IF ((TD_LINUX_64) OR (TD_LINUX_32 AND TD_ARM))
+  INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/src/inc)
+  INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/src/os/inc)
+  INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/src/util/inc)
+  INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/src/query/inc)
+  INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/src/mnode/inc)
+  INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/src/tsdb/inc)
+  INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/src/common/inc)
+  INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/deps/cJson/inc)
+  INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/deps/lz4/inc)
+  INCLUDE_DIRECTORIES(${TD_ENTERPRISE_DIR}/src/inc)
+  INCLUDE_DIRECTORIES(inc)
+  AUX_SOURCE_DIRECTORY(src SRC)
+
+  ADD_EXECUTABLE(taosd ${SRC})
+#  TARGET_LINK_LIBRARIES(taosd mnode taos_static monitor http mqtt tsdb twal vnode cJson lz4 balance sync)
+  TARGET_LINK_LIBRARIES(taosd mnode taos monitor http mqtt tsdb twal vnode cJson lz4 balance sync)
+
+  IF (TD_ACCOUNT)
+    TARGET_LINK_LIBRARIES(taosd account)
+  ENDIF ()
+  
+  IF (TD_GRANT)
+    TARGET_LINK_LIBRARIES(taosd grant)
+  ENDIF ()
+
+  SET(PREPARE_ENV_CMD "prepare_env_cmd")
+  SET(PREPARE_ENV_TARGET "prepare_env_target")
+  ADD_CUSTOM_COMMAND(OUTPUT ${PREPARE_ENV_CMD}
+      POST_BUILD
+      COMMAND echo "make test directory"
+      DEPENDS taosd
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${TD_TESTS_OUTPUT_DIR}/cfg/
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${TD_TESTS_OUTPUT_DIR}/log/
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${TD_TESTS_OUTPUT_DIR}/data/
+      COMMAND ${CMAKE_COMMAND} -E echo dataDir ${TD_TESTS_OUTPUT_DIR}/data > ${TD_TESTS_OUTPUT_DIR}/cfg/taos.cfg
+      COMMAND ${CMAKE_COMMAND} -E echo logDir ${TD_TESTS_OUTPUT_DIR}/log  >> ${TD_TESTS_OUTPUT_DIR}/cfg/taos.cfg
+      COMMAND ${CMAKE_COMMAND} -E echo charset UTF-8  >> ${TD_TESTS_OUTPUT_DIR}/cfg/taos.cfg
+      COMMENT "prepare taosd environment")
+  ADD_CUSTOM_TARGET(${PREPARE_ENV_TARGET} ALL WORKING_DIRECTORY ${TD_EXECUTABLE_OUTPUT_PATH} DEPENDS ${PREPARE_ENV_CMD})
+
+ENDIF ()
+
+

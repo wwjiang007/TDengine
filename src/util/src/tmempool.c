@@ -18,7 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "tlog.h"
+#include "tulog.h"
 #include "tmempool.h"
 #include "tutil.h"
 
@@ -37,13 +37,13 @@ mpool_h taosMemPoolInit(int numOfBlock, int blockSize) {
   pool_t *pool_p;
 
   if (numOfBlock <= 1 || blockSize <= 1) {
-    pError("invalid parameter in memPoolInit\n");
+    uError("invalid parameter in memPoolInit\n");
     return NULL;
   }
 
   pool_p = (pool_t *)malloc(sizeof(pool_t));
   if (pool_p == NULL) {
-    pError("mempool malloc failed\n");
+    uError("mempool malloc failed\n");
     return NULL;
   } else {
     memset(pool_p, 0, sizeof(pool_t));
@@ -55,15 +55,16 @@ mpool_h taosMemPoolInit(int numOfBlock, int blockSize) {
   pool_p->freeList = (int *)malloc(sizeof(int) * (size_t)numOfBlock);
 
   if (pool_p->pool == NULL || pool_p->freeList == NULL) {
-    pError("failed to allocate memory\n");
-    free(pool_p->freeList);
-    free(pool_p->pool);
-    free(pool_p);
+    uError("failed to allocate memory\n");
+    taosTFree(pool_p->freeList);
+    taosTFree(pool_p->pool);
+    taosTFree(pool_p);
     return NULL;
   }
 
   pthread_mutex_init(&(pool_p->mutex), NULL);
 
+  memset(pool_p->pool, 0, (size_t)(blockSize * numOfBlock));
   for (i = 0; i < pool_p->numOfBlock; ++i) pool_p->freeList[i] = i;
 
   pool_p->first = 0;
@@ -78,10 +79,7 @@ char *taosMemPoolMalloc(mpool_h handle) {
 
   pthread_mutex_lock(&(pool_p->mutex));
 
-  if (pool_p->numOfFree <= 0) {
-    pError("mempool: out of memory");
-
-  } else {
+  if (pool_p->numOfFree > 0) {
     pos = pool_p->pool + pool_p->blockSize * (pool_p->freeList[pool_p->first]);
     pool_p->first++;
     pool_p->first = pool_p->first % pool_p->numOfBlock;
@@ -89,7 +87,8 @@ char *taosMemPoolMalloc(mpool_h handle) {
   }
 
   pthread_mutex_unlock(&(pool_p->mutex));
-  if (pos != NULL) memset(pos, 0, (size_t)pool_p->blockSize);
+
+  if (pos == NULL) uDebug("mempool: out of memory");
   return pos;
 }
 
@@ -99,23 +98,24 @@ void taosMemPoolFree(mpool_h handle, char *pMem) {
 
   if (pMem == NULL) return;
 
+  index = (int)(pMem - pool_p->pool) % pool_p->blockSize;
+  if (index != 0) {
+    uError("invalid free address:%p\n", pMem);
+    return;
+  }
+
+  index = (int)((pMem - pool_p->pool) / pool_p->blockSize);
+  if (index < 0 || index >= pool_p->numOfBlock) {
+    uError("mempool: error, invalid address:%p\n", pMem);
+    return;
+  }
+
+  memset(pMem, 0, (size_t)pool_p->blockSize);
+
   pthread_mutex_lock(&pool_p->mutex);
 
-  index = (int)(pMem - pool_p->pool) % pool_p->blockSize;
-
-  if (index != 0) {
-    pError("invalid free address:%p\n", pMem);
-  } else {
-    index = (int)((pMem - pool_p->pool) / pool_p->blockSize);
-
-    if (index < 0 || index >= pool_p->numOfBlock) {
-      pError("mempool: error, invalid address:%p\n", pMem);
-    } else {
-      pool_p->freeList[(pool_p->first + pool_p->numOfFree) % pool_p->numOfBlock] = index;
-      pool_p->numOfFree++;
-      memset(pMem, 0, (size_t)pool_p->blockSize);
-    }
-  }
+  pool_p->freeList[(pool_p->first + pool_p->numOfFree) % pool_p->numOfBlock] = index;
+  pool_p->numOfFree++;
 
   pthread_mutex_unlock(&pool_p->mutex);
 }
@@ -126,6 +126,6 @@ void taosMemPoolCleanUp(mpool_h handle) {
   pthread_mutex_destroy(&pool_p->mutex);
   if (pool_p->pool) free(pool_p->pool);
   if (pool_p->freeList) free(pool_p->freeList);
-  memset(&pool_p, 0, sizeof(pool_p));
+  memset(pool_p, 0, sizeof(*pool_p));
   free(pool_p);
 }

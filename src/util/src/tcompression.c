@@ -19,276 +19,42 @@
  *   To compress integers (including char, short, int, int64_t), the difference
  *   between two integers is calculated at first. Then the difference is
  *   transformed to positive by zig-zag encoding method
- *   (https://gist.github.com/mfuerstenau/ba870a29e16536fdbaba). Then the value
- * is
+ *   (https://gist.github.com/mfuerstenau/ba870a29e16536fdbaba). Then the value is
  *   encoded using simple 8B method. For more information about simple 8B,
  *   refer to https://en.wikipedia.org/wiki/8b/10b_encoding.
  *
- *   NOTE : For bigint, only 59 bits can be used, which means data from -(2**59)
- * to (2**59)-1
+ *   NOTE : For bigint, only 59 bits can be used, which means data from -(2**59) to (2**59)-1
  *   are allowed.
  *
  * BOOLEAN Compression Algorithm:
- *   We provide two methods for compress boolean types. Because boolean types in
- * C
- *   code are char bytes with 0 and 1 values only, only one bit can used to
- * discrimenate
+ *   We provide two methods for compress boolean types. Because boolean types in C
+ *   code are char bytes with 0 and 1 values only, only one bit can used to discrimenate
  *   the values.
- *   1. The first method is using only 1 bit to represent the boolean value with
- * 1 for
+ *   1. The first method is using only 1 bit to represent the boolean value with 1 for
  *   true and 0 for false. Then the compression rate is 1/8.
- *   2. The second method is using run length encoding (RLE) methods. This
- * methos works
+ *   2. The second method is using run length encoding (RLE) methods. This methos works
  *   better when there are a lot of consecutive true values or false values.
  *
  * STRING Compression Algorithm:
  *   We us LZ4 method to compress the string type.
  *
  * FLOAT Compression Algorithm:
- *   We use the same method with Akumuli to compress float and double types. The
- * compression
- *   algorithm assumes the float/double values change slightly. So we take the
- * XOR between two
- *   adjacent values. Then compare the number of leading zeros and trailing
- * zeros. If the number
- *   of leading zeros are larger than the trailing zeros, then record the last
- * serveral bytes
- *   of the XORed value with informations. If not, record the first
- * corresponding bytes.
+ *   We use the same method with Akumuli to compress float and double types. The compression
+ *   algorithm assumes the float/double values change slightly. So we take the XOR between two
+ *   adjacent values. Then compare the number of leading zeros and trailing zeros. If the number
+ *   of leading zeros are larger than the trailing zeros, then record the last serveral bytes
+ *   of the XORed value with informations. If not, record the first corresponding bytes.
  *
  */
-#include <assert.h>
-#include <limits.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
+#include "os.h"
 #include "lz4.h"
 #include "tscompression.h"
-#include "tsdb.h"
-#include "ttypes.h"
+#include "taosdef.h"
 
 const int TEST_NUMBER = 1;
 #define is_bigendian() ((*(char *)&TEST_NUMBER) == 0)
 #define SIMPLE8B_MAX_INT64 ((uint64_t)2305843009213693951L)
-
-// Function declarations
-int tsCompressINTImp(const char *const input, const int nelements, char *const output, const char type);
-int tsDecompressINTImp(const char *const input, const int nelements, char *const output, const char type);
-int tsCompressBoolImp(const char *const input, const int nelements, char *const output);
-int tsDecompressBoolImp(const char *const input, const int nelements, char *const output);
-int tsCompressStringImp(const char *const input, int inputSize, char *const output, int outputSize);
-int tsDecompressStringImp(const char *const input, int compressedSize, char *const output, int outputSize);
-int tsCompressTimestampImp(const char *const input, const int nelements, char *const output);
-int tsDecompressTimestampImp(const char *const input, const int nelements, char *const output);
-int tsCompressDoubleImp(const char *const input, const int nelements, char *const output);
-int tsDecompressDoubleImp(const char *const input, const int nelements, char *const output);
-int tsCompressFloatImp(const char *const input, const int nelements, char *const output);
-int tsDecompressFloatImp(const char *const input, const int nelements, char *const output);
-
-/* ----------------------------------------------Compression function used by
- * others ---------------------------------------------- */
-int tsCompressTinyint(const char *const input, int inputSize, const int nelements, char *const output, int outputSize, char algorithm,
-                      char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsCompressINTImp(input, nelements, output, TSDB_DATA_TYPE_TINYINT);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    int len = tsCompressINTImp(input, nelements, buffer, TSDB_DATA_TYPE_TINYINT);
-    return tsCompressStringImp(buffer, len, output, outputSize);
-  } else {
-    assert(0);
-  }
-}
-
-int tsDecompressTinyint(const char *const input, int compressedSize, const int nelements, char *const output,
-                        int outputSize, char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsDecompressINTImp(input, nelements, output, TSDB_DATA_TYPE_TINYINT);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    tsDecompressStringImp(input, compressedSize, buffer, bufferSize);
-    return tsDecompressINTImp(buffer, nelements, output, TSDB_DATA_TYPE_TINYINT);
-  } else {
-    assert(0);
-  }
-}
-
-int tsCompressSmallint(const char *const input, int inputSize, const int nelements, char *const output, int outputSize, char algorithm,
-                       char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsCompressINTImp(input, nelements, output, TSDB_DATA_TYPE_SMALLINT);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    int len = tsCompressINTImp(input, nelements, buffer, TSDB_DATA_TYPE_SMALLINT);
-    return tsCompressStringImp(buffer, len, output, outputSize);
-  } else {
-    assert(0);
-  }
-}
-
-int tsDecompressSmallint(const char *const input, int compressedSize, const int nelements, char *const output,
-                         int outputSize, char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsDecompressINTImp(input, nelements, output, TSDB_DATA_TYPE_SMALLINT);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    tsDecompressStringImp(input, compressedSize, buffer, bufferSize);
-    return tsDecompressINTImp(buffer, nelements, output, TSDB_DATA_TYPE_SMALLINT);
-  } else {
-    assert(0);
-  }
-}
-
-int tsCompressInt(const char *const input, int inputSize, const int nelements, char *const output, int outputSize, char algorithm,
-                  char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsCompressINTImp(input, nelements, output, TSDB_DATA_TYPE_INT);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    int len = tsCompressINTImp(input, nelements, buffer, TSDB_DATA_TYPE_INT);
-    return tsCompressStringImp(buffer, len, output, outputSize);
-  } else {
-    assert(0);
-  }
-}
-
-int tsDecompressInt(const char *const input, int compressedSize, const int nelements, char *const output,
-                    int outputSize, char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsDecompressINTImp(input, nelements, output, TSDB_DATA_TYPE_INT);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    tsDecompressStringImp(input, compressedSize, buffer, bufferSize);
-    return tsDecompressINTImp(buffer, nelements, output, TSDB_DATA_TYPE_INT);
-  } else {
-    assert(0);
-  }
-}
-
-int tsCompressBigint(const char *const input, int inputSize, const int nelements, char *const output, int outputSize,
-                     char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsCompressINTImp(input, nelements, output, TSDB_DATA_TYPE_BIGINT);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    int len = tsCompressINTImp(input, nelements, buffer, TSDB_DATA_TYPE_BIGINT);
-    return tsCompressStringImp(buffer, len, output, outputSize);
-  } else {
-    assert(0);
-  }
-}
-
-int tsDecompressBigint(const char *const input, int compressedSize, const int nelements, char *const output,
-                       int outputSize, char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsDecompressINTImp(input, nelements, output, TSDB_DATA_TYPE_BIGINT);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    tsDecompressStringImp(input, compressedSize, buffer, bufferSize);
-    return tsDecompressINTImp(buffer, nelements, output, TSDB_DATA_TYPE_BIGINT);
-  } else {
-    assert(0);
-  }
-}
-
-int tsCompressBool(const char *const input, int inputSize, const int nelements, char *const output, int outputSize, 
-                   char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsCompressBoolImp(input, nelements, output);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    int len = tsCompressBoolImp(input, nelements, buffer);
-    return tsCompressStringImp(buffer, len, output, outputSize);
-  } else {
-    assert(0);
-  }
-}
-
-int tsDecompressBool(const char *const input, int compressedSize, const int nelements, char *const output,
-                     int outputSize, char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsDecompressBoolImp(input, nelements, output);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    tsDecompressStringImp(input, compressedSize, buffer, bufferSize);
-    return tsDecompressBoolImp(buffer, nelements, output);
-  } else {
-    assert(0);
-  }
-}
-
-int tsCompressString(const char *const input, int inputSize, const int nelements, char *const output, int outputSize,
-                     char algorithm, char *const buffer, int bufferSize) {
-  return tsCompressStringImp(input, inputSize, output, outputSize);
-}
-
-int tsDecompressString(const char *const input, int compressedSize, const int nelements, char *const output,
-                       int outputSize, char algorithm, char *const buffer, int bufferSize) {
-  return tsDecompressStringImp(input, compressedSize, output, outputSize);
-}
-
-int tsCompressFloat(const char *const input, int inputSize, const int nelements, char *const output, int outputSize,
-                    char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsCompressFloatImp(input, nelements, output);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    int len = tsCompressFloatImp(input, nelements, buffer);
-    return tsCompressStringImp(buffer, len, output, outputSize);
-  } else {
-    assert(0);
-  }
-}
-
-int tsDecompressFloat(const char *const input, int compressedSize, const int nelements, char *const output,
-                      int outputSize, char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsDecompressFloatImp(input, nelements, output);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    tsDecompressStringImp(input, compressedSize, buffer, bufferSize);
-    return tsDecompressFloatImp(buffer, nelements, output);
-  } else {
-    assert(0);
-  }
-}
-int tsCompressDouble(const char *const input, int inputSize, const int nelements, char *const output, int outputSize,
-                     char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsCompressDoubleImp(input, nelements, output);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    int len = tsCompressDoubleImp(input, nelements, buffer);
-    return tsCompressStringImp(buffer, len, output, outputSize);
-  } else {
-    assert(0);
-  }
-}
-
-int tsDecompressDouble(const char *const input, int compressedSize, const int nelements, char *const output,
-                       int outputSize, char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsDecompressDoubleImp(input, nelements, output);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    tsDecompressStringImp(input, compressedSize, buffer, bufferSize);
-    return tsDecompressDoubleImp(buffer, nelements, output);
-  } else {
-    assert(0);
-  }
-}
-
-int tsCompressTimestamp(const char *const input, int inputSize, const int nelements, char *const output, int outputSize,
-                        char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsCompressTimestampImp(input, nelements, output);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    int len = tsCompressTimestampImp(input, nelements, buffer);
-    return tsCompressStringImp(buffer, len, output, outputSize);
-  } else {
-    assert(0);
-  }
-}
-
-int tsDecompressTimestamp(const char *const input, int compressedSize, const int nelements, char *const output,
-                          int outputSize, char algorithm, char *const buffer, int bufferSize) {
-  if (algorithm == ONE_STAGE_COMP) {
-    return tsDecompressTimestampImp(input, nelements, output);
-  } else if (algorithm == TWO_STAGE_COMP) {
-    tsDecompressStringImp(input, compressedSize, buffer, bufferSize);
-    return tsDecompressTimestampImp(buffer, nelements, output);
-  } else {
-    assert(0);
-  }
-}
 
 bool safeInt64Add(int64_t a, int64_t b) {
   if ((a > 0 && b > INT64_MAX - a) || (a < 0 && b < INT64_MIN - a)) return false;
@@ -368,19 +134,19 @@ int tsCompressINTImp(const char *const input, const int nelements, char *const o
         // Take care here, __builtin_clzl give wrong anser for value 0;
         tmp_bit = 0;
       } else {
-        tmp_bit = (LONG_BYTES * BITS_PER_BYTE) - __builtin_clzl(zigzag_value);
+        tmp_bit = (LONG_BYTES * BITS_PER_BYTE) - BUILDIN_CLZL(zigzag_value);
       }
 
-      if (elems + 1 <= selector_to_elems[selector] && elems + 1 <= selector_to_elems[bit_to_selector[tmp_bit]]) {
+      if (elems + 1 <= selector_to_elems[(int)selector] && elems + 1 <= selector_to_elems[(int)(bit_to_selector[(int)tmp_bit])]) {
         // If can hold another one.
-        selector = selector > bit_to_selector[tmp_bit] ? selector : bit_to_selector[tmp_bit];
+        selector = selector > bit_to_selector[(int)tmp_bit] ? selector : bit_to_selector[(int)tmp_bit];
         elems++;
-        bit = bit_per_integer[selector];
+        bit = bit_per_integer[(int)selector];
       } else {
         // if cannot hold another one.
-        while (elems < selector_to_elems[selector]) selector++;
-        elems = selector_to_elems[selector];
-        bit = bit_per_integer[selector];
+        while (elems < selector_to_elems[(int)selector]) selector++;
+        elems = selector_to_elems[(int)selector];
+        bit = bit_per_integer[(int)selector];
         break;
       }
       prev_value_tmp = curr_value;
@@ -471,8 +237,8 @@ int tsDecompressINTImp(const char *const input, const int nelements, char *const
     memcpy(&w, ip, LONG_BYTES);
 
     char selector = (char)(w & INT64MASK(4));  // selector = 4
-    char bit = bit_per_integer[selector];      // bit = 3
-    int  elems = selector_to_elems[selector];
+    char bit = bit_per_integer[(int)selector];      // bit = 3
+    int  elems = selector_to_elems[(int)selector];
 
     for (int i = 0; i < elems; i++) {
       uint64_t zigzag_value;
@@ -695,14 +461,14 @@ int tsCompressTimestampImp(const char *const input, const int nelements, char *c
       if (dd1 == 0) {
         flag1 = 0;
       } else {
-        flag1 = LONG_BYTES - __builtin_clzl(dd1) / BITS_PER_BYTE;
+        flag1 = LONG_BYTES - BUILDIN_CLZL(dd1) / BITS_PER_BYTE;
       }
     } else {
       dd2 = zigzag_value;
       if (dd2 == 0) {
         flag2 = 0;
       } else {
-        flag2 = LONG_BYTES - __builtin_clzl(dd2) / BITS_PER_BYTE;
+        flag2 = LONG_BYTES - BUILDIN_CLZL(dd2) / BITS_PER_BYTE;
       }
       flags = flag1 | (flag2 << 4);
       // Encode the flag.
@@ -785,7 +551,7 @@ int tsDecompressTimestampImp(const char *const input, const int nelements, char 
         delta_of_delta = 0;
       } else {
         if (is_bigendian()) {
-          memcpy(&dd1 + LONG_BYTES - nbytes, input + ipos, nbytes);
+          memcpy(((char *)(&dd1)) + LONG_BYTES - nbytes, input + ipos, nbytes);
         } else {
           memcpy(&dd1, input + ipos, nbytes);
         }
@@ -810,7 +576,7 @@ int tsDecompressTimestampImp(const char *const input, const int nelements, char 
         delta_of_delta = 0;
       } else {
         if (is_bigendian()) {
-          memcpy(&dd2 + LONG_BYTES - nbytes, input + ipos, nbytes);
+          memcpy(((char *)(&dd2)) + LONG_BYTES - nbytes, input + ipos, nbytes);
         } else {
           memcpy(&dd2, input + ipos, nbytes);
         }
@@ -869,8 +635,8 @@ int tsCompressDoubleImp(const char *const input, const int nelements, char *cons
     int trailing_zeros = leading_zeros;
 
     if (diff) {
-      trailing_zeros = __builtin_ctzl(diff);
-      leading_zeros = __builtin_clzl(diff);
+      trailing_zeros = BUILDIN_CTZL(diff);
+      leading_zeros = BUILDIN_CLZL(diff);
     }
 
     uint8_t nbytes = 0;
@@ -1016,8 +782,8 @@ int tsCompressFloatImp(const char *const input, const int nelements, char *const
     int trailing_zeros = leading_zeros;
 
     if (diff) {
-      trailing_zeros = __builtin_ctz(diff);
-      leading_zeros = __builtin_clz(diff);
+      trailing_zeros = BUILDIN_CTZ(diff);
+      leading_zeros = BUILDIN_CLZ(diff);
     }
 
     uint8_t nbytes = 0;

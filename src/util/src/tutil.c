@@ -13,26 +13,13 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <assert.h>
-#include <locale.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-#include <limits.h>
-#include <netinet/in.h>
-#include <sys/time.h>
-#include <unistd.h>
-
-#ifdef USE_LIBICONV
-#include "iconv.h"
-#endif
-
+#include "os.h"
 #include "tcrc32c.h"
-#include "tglobalcfg.h"
-#include "ttime.h"
-#include "ttypes.h"
+#include "tglobal.h"
+#include "taosdef.h"
 #include "tutil.h"
+#include "tulog.h"
+#include "taoserror.h"
 
 int32_t strdequote(char *z) {
   if (z == NULL) {
@@ -65,7 +52,7 @@ int32_t strdequote(char *z) {
   return j + 1;  // only one quote, do nothing
 }
 
-void strtrim(char *z) {
+size_t strtrim(char *z) {
   int32_t i = 0;
   int32_t j = 0;
 
@@ -76,7 +63,7 @@ void strtrim(char *z) {
 
   if (z[j] == 0) {
     z[0] = 0;
-    return;
+    return 0;
   }
 
   delta = j;
@@ -94,9 +81,12 @@ void strtrim(char *z) {
 
   if (stop > 0) {
     z[stop - delta] = 0;
+    return (stop - delta);
   } else if (j != i) {
     z[i] = 0;
   }
+  
+  return i;
 }
 
 char **strsplit(char *z, const char *delim, int32_t *num) {
@@ -115,14 +105,25 @@ char **strsplit(char *z, const char *delim, int32_t *num) {
     if ((*num) >= size) {
       size = (size << 1);
       split = realloc(split, POINTER_BYTES * size);
+      assert(NULL != split);
     }
   }
 
   return split;
 }
 
-char *strnchr(char *haystack, char needle, int32_t len) {
+char *strnchr(char *haystack, char needle, int32_t len, bool skipquote) {
   for (int32_t i = 0; i < len; ++i) {
+
+    // skip the needle in quote, jump to the end of quoted string
+    if (skipquote && (haystack[i] == '\'' || haystack[i] == '"')) {
+      char quote = haystack[i++];
+      while(i < len && haystack[i++] != quote);
+      if (i >= len) {
+        return NULL;
+      }
+    }
+
     if (haystack[i] == needle) {
       return &haystack[i];
     }
@@ -131,31 +132,66 @@ char *strnchr(char *haystack, char needle, int32_t len) {
   return NULL;
 }
 
-void strtolower(char *z, char *dst) {
-  int   quote = 0;
-  char *str = z;
-  if (dst == NULL) {
-    return;
+char* strtolower(char *dst, const char *src) {
+  int esc = 0;
+  char quote = 0, *p = dst, c;
+
+  assert(dst != NULL);
+
+  for (c = *src++; c; c = *src++) {
+    if (esc) {
+      esc = 0;
+    } else if (quote) {
+      if (c == '\\') {
+        esc = 1;
+      } else if (c == quote) {
+        quote = 0;
+      }
+    } else if (c >= 'A' && c <= 'Z') {
+      c -= 'A' - 'a';
+    } else if (c == '\'' || c == '"') {
+      quote = c;
+    }
+    *p++ = c;
   }
 
-  while (*str) {
-    if (*str == '\'' || *str == '"') {
-      quote = quote ^ 1;
-    }
+  *p = 0;
+  return dst;
+}
 
-    if ((!quote) && (*str >= 'A' && *str <= 'Z')) {
-      *dst++ = *str | 0x20;
-    } else {
-      *dst++ = *str;
-    }
+char* strntolower(char *dst, const char *src, int32_t n) {
+  int esc = 0;
+  char quote = 0, *p = dst, c;
 
-    str++;
+  assert(dst != NULL);
+  if (n == 0) {
+    *p = 0;
+    return dst;
+  } 
+  for (c = *src++; n-- > 0; c = *src++) {
+    if (esc) {
+      esc = 0;
+    } else if (quote) {
+      if (c == '\\') {
+        esc = 1;
+      } else if (c == quote) {
+        quote = 0;
+      }
+    } else if (c >= 'A' && c <= 'Z') {
+      c -= 'A' - 'a';
+    } else if (c == '\'' || c == '"') {
+      quote = c;
+    }
+    *p++ = c;
   }
+
+  *p = 0;
+  return dst;
 }
 
 char *paGetToken(char *string, char **token, int32_t *tokenLen) {
   char quote = 0;
-
+  
   while (*string != 0) {
     if (*string == ' ' || *string == '\t') {
       ++string;
@@ -216,7 +252,7 @@ int64_t strnatoi(char *num, int32_t len) {
       } else {
         return 0;
       }
-      ret = dig * base;
+      ret += dig * base;
     }
   } else {
     for (i = len - 1; i >= 0; --i, base *= 10) {
@@ -232,92 +268,18 @@ int64_t strnatoi(char *num, int32_t len) {
   return ret;
 }
 
-FORCE_INLINE size_t getLen(size_t old, size_t size) {
-  if (old == 1) {
-    old = 2;
-  }
-
-  while (old < size) {
-    old = (old * 1.5);
-  }
-
-  return old;
-}
-
-static char *ensureSpace(char *dest, size_t *curSize, size_t size) {
-  if (*curSize < size) {
-    *curSize = getLen(*curSize, size);
-
-    char *tmp = realloc(dest, *curSize);
-    if (tmp == NULL) {
-      free(dest);
-      return NULL;
+char *strbetween(char *string, char *begin, char *end) {
+  char *result = NULL;
+  char *_begin = strstr(string, begin);
+  if (_begin != NULL) {
+    char *_end = strstr(_begin + strlen(begin), end);
+    int   size = _end - _begin;
+    if (_end != NULL && size > 0) {
+      result = (char *)calloc(1, size);
+      memcpy(result, _begin + strlen(begin), size - +strlen(begin));
     }
-
-    return tmp;
   }
-
-  return dest;
-}
-
-char *strreplace(const char *str, const char *pattern, const char *rep) {
-  if (str == NULL || pattern == NULL || rep == NULL) {
-    return NULL;
-  }
-
-  const char *s = str;
-
-  size_t oldLen = strlen(str);
-  size_t newLen = oldLen;
-
-  size_t repLen = strlen(rep);
-  size_t patternLen = strlen(pattern);
-
-  char *dest = calloc(1, oldLen + 1);
-  if (dest == NULL) {
-    return NULL;
-  }
-
-  if (patternLen == 0) {
-    return strcpy(dest, str);
-  }
-
-  int32_t start = 0;
-
-  while (1) {
-    char *p = strstr(str, pattern);
-    if (p == NULL) {  // remain does not contain pattern
-      size_t remain = (oldLen - (str - s));
-      size_t size = remain + start + 1;
-
-      dest = ensureSpace(dest, &newLen, size);
-      if (dest == NULL) {
-        return NULL;
-      }
-
-      strcpy(dest + start, str);
-      dest[start + remain] = 0;
-      break;
-    }
-
-    size_t len = p - str;
-    size_t size = start + len + repLen + 1;
-
-    dest = ensureSpace(dest, &newLen, size);
-    if (dest == NULL) {
-      return NULL;
-    }
-
-    memcpy(dest + start, str, len);
-
-    str += (len + patternLen);
-    start += len;
-
-    memcpy(dest + start, rep, repLen);
-    start += repLen;
-  }
-
-  return dest;
+  return result;
 }
 
 int32_t taosByteArrayToHexStr(char bytes[], int32_t len, char hexstr[]) {
@@ -325,7 +287,7 @@ int32_t taosByteArrayToHexStr(char bytes[], int32_t len, char hexstr[]) {
   char    hexval[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
 
   for (i = 0; i < len; i++) {
-    hexstr[i * 2] = hexval[((bytes[i] >> 4) & 0xF)];
+    hexstr[i * 2] = hexval[((bytes[i] >> 4u) & 0xF)];
     hexstr[(i * 2) + 1] = hexval[(bytes[i]) & 0x0F];
   }
 
@@ -364,95 +326,82 @@ int32_t taosHexStrToByteArray(char hexstr[], char bytes[]) {
   return 0;
 }
 
-// rename file name
-int32_t taosFileRename(char *fullPath, char *suffix, char delimiter, char **dstPath) {
-  int32_t ts = taosGetTimestampSec();
-
-  char fname[PATH_MAX] = {0};  // max file name length must be less than 255
-
-  char *delimiterPos = strrchr(fullPath, delimiter);
-  if (delimiterPos == NULL) return -1;
-
-  int32_t fileNameLen = 0;
-  if (suffix)
-    fileNameLen = snprintf(fname, PATH_MAX, "%s.%d.%s", delimiterPos + 1, ts, suffix);
-  else
-    fileNameLen = snprintf(fname, PATH_MAX, "%s.%d", delimiterPos + 1, ts);
-
-  size_t len = (size_t)((delimiterPos - fullPath) + fileNameLen + 1);
-  if (*dstPath == NULL) {
-    *dstPath = calloc(1, len + 1);
-    if (*dstPath == NULL) return -1;
+bool taosGetVersionNumber(char *versionStr, int *versionNubmer) {
+  if (versionStr == NULL || versionNubmer == NULL) {
+    return false;
   }
 
-  strncpy(*dstPath, fullPath, (size_t)(delimiterPos - fullPath + 1));
-  strncat(*dstPath, fname, (size_t)fileNameLen);
-  (*dstPath)[len] = 0;
+  int versionNumberPos[5] = {0};
+  int len = strlen(versionStr);
+  int dot = 0;
+  for (int pos = 0; pos < len && dot < 4; ++pos) {
+    if (versionStr[pos] == '.') {
+      versionStr[pos] = 0;
+      versionNumberPos[++dot] = pos + 1;
+    }
+  }
 
-  return rename(fullPath, *dstPath);
+  if (dot != 3) {
+    return false;
+  }
+
+  for (int pos = 0; pos < 4; ++pos) {
+    versionNubmer[pos] = atoi(versionStr + versionNumberPos[pos]);
+  }
+  versionStr[versionNumberPos[1] - 1] = '.';
+  versionStr[versionNumberPos[2] - 1] = '.';
+  versionStr[versionNumberPos[3] - 1] = '.';
+
+  return true;
 }
 
-bool taosCheckDbName(char *db, char *monitordb) {
-  char *pos = strchr(db, '.');
-  if (pos == NULL) return false;
+int taosCheckVersion(char *input_client_version, char *input_server_version, int comparedSegments) {
+  char client_version[TSDB_VERSION_LEN] = {0};
+  char server_version[TSDB_VERSION_LEN] = {0};
+  int clientVersionNumber[4] = {0};
+  int serverVersionNumber[4] = {0};
 
-  return strncasecmp(pos + 1, monitordb, strlen(monitordb)) == 0;
+  tstrncpy(client_version, input_client_version, sizeof(client_version));
+  tstrncpy(server_version, input_server_version, sizeof(server_version));
+
+  if (!taosGetVersionNumber(client_version, clientVersionNumber)) {
+    uError("invalid client version:%s", client_version);
+    return TSDB_CODE_TSC_INVALID_VERSION;
+  }
+
+  if (!taosGetVersionNumber(server_version, serverVersionNumber)) {
+    uError("invalid server version:%s", server_version);
+    return TSDB_CODE_TSC_INVALID_VERSION;
+  }
+
+  for(int32_t i = 0; i < comparedSegments; ++i) {
+    if (clientVersionNumber[i] != serverVersionNumber[i]) {
+      uError("the %d-th number of server version:%s not matched with client version:%s", i, server_version, version);
+      return TSDB_CODE_TSC_INVALID_VERSION;
+    }
+  }
+
+  return 0;
 }
 
-bool taosUcs4ToMbs(void *ucs4, int32_t ucs4_max_len, char *mbs) {
-#ifdef USE_LIBICONV
-  iconv_t cd = iconv_open(tsCharset, DEFAULT_UNICODE_ENCODEC);
-  size_t ucs4_input_len = ucs4_max_len;
-  size_t outLen = ucs4_max_len;
-  if (iconv(cd, (char **)&ucs4, &ucs4_input_len, &mbs, &outLen) == -1) {
-    iconv_close(cd);
-    return false;
-  }
-  iconv_close(cd);
-  return true;
-#else
-  mbstate_t state = {0};
-  int32_t len = (int32_t) wcsnrtombs(NULL, (const wchar_t **) &ucs4, ucs4_max_len / 4, 0, &state);
-  if (len < 0) {
-    return false;
-  }
-  memset(&state, 0, sizeof(state));
-  len = wcsnrtombs(mbs, (const wchar_t **) &ucs4, ucs4_max_len / 4, (size_t) len, &state);
-  if (len < 0) {
-    return false;
-  }
-  return true;
-#endif
+char *taosIpStr(uint32_t ipInt) {
+  static char ipStrArray[3][30];
+  static int ipStrIndex = 0;
+
+  char *ipStr = ipStrArray[(ipStrIndex++) % 3];
+  //sprintf(ipStr, "0x%x:%u.%u.%u.%u", ipInt, ipInt & 0xFF, (ipInt >> 8) & 0xFF, (ipInt >> 16) & 0xFF, (uint8_t)(ipInt >> 24));
+  sprintf(ipStr, "%u.%u.%u.%u", ipInt & 0xFF, (ipInt >> 8) & 0xFF, (ipInt >> 16) & 0xFF, (uint8_t)(ipInt >> 24));
+  return ipStr;
 }
 
-bool taosMbsToUcs4(char *mbs, int32_t mbs_len, char *ucs4, int32_t ucs4_max_len) {
-  memset(ucs4, 0, ucs4_max_len);
-#ifdef USE_LIBICONV
-  iconv_t cd = iconv_open(DEFAULT_UNICODE_ENCODEC, tsCharset);
-  size_t ucs4_input_len = mbs_len;
-  size_t outLen = ucs4_max_len;
-  if (iconv(cd, &mbs, &ucs4_input_len, &ucs4, &outLen) == -1) {
-    iconv_close(cd);
-    return false;
-  }
-  iconv_close(cd);
-  return true;
-#else
-  mbstate_t state = {0};
-  int32_t len = mbsnrtowcs((wchar_t *) ucs4, (const char **) &mbs, mbs_len, ucs4_max_len / 4, &state);
-  return len >= 0;
-#endif
+FORCE_INLINE float taos_align_get_float(const char* pBuf) {
+  float fv = 0; 
+  *(int32_t*)(&fv) = *(int32_t*)pBuf;
+  return fv; 
 }
 
-bool taosValidateEncodec(char *encodec) {
-#ifdef USE_LIBICONV
-  iconv_t cd = iconv_open(encodec, DEFAULT_UNICODE_ENCODEC);
-  if (cd == (iconv_t)(-1)) {
-    return false;
-  }
-  iconv_close(cd);
-  return true;
-#else
-  return true;
-#endif
+FORCE_INLINE double taos_align_get_double(const char* pBuf) {
+  double dv = 0; 
+  *(int64_t*)(&dv) = *(int64_t*)pBuf;
+  return dv; 
 }

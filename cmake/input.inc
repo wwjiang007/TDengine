@@ -1,0 +1,43 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
+PROJECT(TDengine)
+
+IF (${ACCOUNT} MATCHES "true")
+  SET(TD_ACCOUNT TRUE)
+  MESSAGE(STATUS "Build with account plugins")
+ELSEIF (${ACCOUNT} MATCHES "false")
+  SET(TD_ACCOUNT FALSE)
+  MESSAGE(STATUS "Build without account plugins")
+ENDIF ()
+
+IF (${COVER} MATCHES "true")
+  SET(TD_COVER TRUE)
+  MESSAGE(STATUS "Build with test coverage")
+ELSEIF (${COVER} MATCHES "false")
+  SET(TD_COVER FALSE)
+  MESSAGE(STATUS "Build without test coverage")
+ENDIF ()
+
+IF (${PAGMODE} MATCHES "lite")
+  SET(TD_PAGMODE_LITE TRUE)
+  MESSAGE(STATUS "Build with pagmode lite")
+ENDIF ()
+
+IF (${DLLTYPE} MATCHES "go")
+  SET(TD_GODLL TRUE)
+  MESSAGE(STATUS "input dll type: " ${DLLTYPE})
+ENDIF ()
+
+IF (${MEM_CHECK} MATCHES "true")
+  SET(TD_MEM_CHECK TRUE)
+  MESSAGE(STATUS "build with memory check")
+ENDIF ()
+
+IF (${RANDOM_FILE_FAIL} MATCHES "true")
+  SET(TD_RANDOM_FILE_FAIL TRUE)
+  MESSAGE(STATUS "build with random-file-fail enabled")
+ENDIF ()
+
+IF (${RANDOM_NETWORK_FAIL} MATCHES "true")
+  SET(TD_RANDOM_NETWORK_FAIL TRUE)
+  MESSAGE(STATUS "build with random-network-fail enabled")
+ENDIF ()

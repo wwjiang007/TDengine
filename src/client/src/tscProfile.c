@@ -13,17 +13,31 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-
-#include "tlog.h"
+#include "os.h"
+#include "tscLog.h"
 #include "tsclient.h"
-#include "ttime.h"
 #include "ttimer.h"
 #include "tutil.h"
+#include "taosmsg.h"
+
+void  tscSaveSlowQueryFp(void *handle, void *tmrId);
+void *tscSlowQueryConn = NULL;
+bool  tscSlowQueryConnInitialized = false;
+
+void tscInitConnCb(void *param, TAOS_RES *result, int code) {
+  char *sql = param;
+  if (code < 0) {
+    tscError("taos:%p, slow query connect failed, code:%d", tscSlowQueryConn, code);
+    taos_close(tscSlowQueryConn);
+    tscSlowQueryConn = NULL;
+    tscSlowQueryConnInitialized = false;
+    free(sql);
+  } else {
+    tscDebug("taos:%p, slow query connect success, code:%d", tscSlowQueryConn, code);
+    tscSlowQueryConnInitialized = true;
+    tscSaveSlowQueryFp(sql, NULL);
+  }
+}
 
 void tscAddIntoSqlList(SSqlObj *pSql) {
   static uint32_t queryId = 1;
@@ -44,50 +58,62 @@ void tscAddIntoSqlList(SSqlObj *pSql) {
   pSql->stime = taosGetTimestampMs();
   pSql->listed = 1;
 
-  tscTrace("%p added into sqlList", pSql);
+  tscDebug("%p added into sqlList", pSql);
 }
 
 void tscSaveSlowQueryFpCb(void *param, TAOS_RES *result, int code) {
   if (code < 0) {
-    tscError("failed to save slowquery, code:%d", code);
+    tscError("failed to save slow query, code:%d", code);
+  } else {
+    tscDebug("success to save slow query, code:%d", code);
   }
 }
 
 void tscSaveSlowQueryFp(void *handle, void *tmrId) {
   char *sql = handle;
 
-  static void *taos = NULL;
-  if (taos == NULL) {
-    taos = taos_connect(NULL, "sys", tsInternalPass, NULL, 0);
-    if (taos == NULL) {
-      tscError("failed to save slow query, can't connect to server");
+  if (!tscSlowQueryConnInitialized) {
+    if (tscSlowQueryConn == NULL) {
+      tscDebug("start to init slow query connect");
+      taos_connect_a(NULL, "monitor", tsInternalPass, "", 0, tscInitConnCb, sql, &tscSlowQueryConn);
+    } else {
+      tscError("taos:%p, slow query connect is already initialized", tscSlowQueryConn);
       free(sql);
-      return;
     }
+  } else {
+    tscDebug("taos:%p, save slow query:%s", tscSlowQueryConn, sql);
+    taos_query_a(tscSlowQueryConn, sql, tscSaveSlowQueryFpCb, NULL);
+    free(sql);
   }
-
-  tscTrace("save slow query:sql", sql);
-  taos_query_a(taos, sql, tscSaveSlowQueryFpCb, NULL);
-  free(sql);
 }
 
 void tscSaveSlowQuery(SSqlObj *pSql) {
-  const static int64_t SLOW_QUERY_INTERVAL = 3000000L;
-  if (pSql->res.useconds < SLOW_QUERY_INTERVAL) return;
+  const static int64_t SLOW_QUERY_INTERVAL = 3000000L; // todo configurable
+  size_t size = 200;  // other part of sql string, expect the main sql str
+  
+  if (pSql->res.useconds < SLOW_QUERY_INTERVAL) {
+    return;
+  }
 
-  tscTrace("%p query time:%ld sql:%s", pSql, pSql->res.useconds, pSql->sqlstr);
-
-  char *sql = malloc(200);
-  int   len = snprintf(sql, 200, "insert into sys.slowquery values(now, '%s', %ld, %ld, '", pSql->pTscObj->user,
-                     pSql->stime, pSql->res.useconds);
-  int sqlLen = snprintf(sql + len, TSDB_SHOW_SQL_LEN, "%s", pSql->sqlstr);
-  if (sqlLen > TSDB_SHOW_SQL_LEN - 1) {
-    sqlLen = len + TSDB_SHOW_SQL_LEN - 1;
+  tscDebug("%p query time:%" PRId64 " sql:%s", pSql, pSql->res.useconds, pSql->sqlstr);
+  int32_t sqlSize = TSDB_SLOW_QUERY_SQL_LEN + size;
+  
+  char *sql = malloc(sqlSize);
+  if (sql == NULL) {
+    tscError("%p failed to allocate memory to sent slow query to dnode", pSql);
+    return;
+  }
+  
+  int len = snprintf(sql, size, "insert into %s.slowquery values(now, '%s', %" PRId64 ", %" PRId64 ", '", tsMonitorDbName,
+          pSql->pTscObj->user, pSql->stime, pSql->res.useconds);
+  int sqlLen = snprintf(sql + len, TSDB_SLOW_QUERY_SQL_LEN, "%s", pSql->sqlstr);
+  if (sqlLen > TSDB_SLOW_QUERY_SQL_LEN - 1) {
+    sqlLen = len + TSDB_SLOW_QUERY_SQL_LEN - 1;
   } else {
     sqlLen += len;
   }
+  
   strcpy(sql + sqlLen, "')");
-
   taosTmrStart(tscSaveSlowQueryFp, 200, sql, tscTmr);
 }
 
@@ -111,7 +137,7 @@ void tscRemoveFromSqlList(SSqlObj *pSql) {
   pSql->listed = 0;
 
   tscSaveSlowQuery(pSql);
-  tscTrace("%p removed from sqlList", pSql);
+  tscDebug("%p removed from sqlList", pSql);
 }
 
 void tscKillQuery(STscObj *pObj, uint32_t killId) {
@@ -127,7 +153,7 @@ void tscKillQuery(STscObj *pObj, uint32_t killId) {
 
   if (pSql == NULL) return;
 
-  tscTrace("%p query is killed, queryId:%d thandle:%p", pSql, killId, pSql->thandle);
+  tscDebug("%p query is killed, queryId:%d", pSql, killId);
   taos_stop_query(pSql);
 }
 
@@ -180,25 +206,27 @@ void tscKillStream(STscObj *pObj, uint32_t killId) {
 
   pthread_mutex_unlock(&pObj->mutex);
 
-  tscTrace("%p stream:%p is killed, streamId:%d", pStream->pSql, pStream, killId);
-
-  taos_close_stream(pStream);
-  if (pStream->callback) {
-    pStream->callback(pStream->param);
+  if (pStream) {
+    tscDebug("%p stream:%p is killed, streamId:%d", pStream->pSql, pStream, killId);
+    if (pStream->callback) {
+      pStream->callback(pStream->param);
+    }
+    taos_close_stream(pStream);
+  } else {
+    tscError("failed to kill stream, streamId:%d not exist", killId);
   }
 }
 
-char *tscBuildQueryStreamDesc(char *pMsg, STscObj *pObj) {
-  SQList *pQList = (SQList *)pMsg;
-  char *  pMax = pMsg + TSDB_PAYLOAD_SIZE - 256;
-
-  SQDesc *pQdesc = pQList->qdesc;
-  pQList->numOfQueries = 0;
+int tscBuildQueryStreamDesc(void *pMsg, STscObj *pObj) {
+  SCMHeartBeatMsg *pHeartbeat = pMsg;
+  int allocedQueriesNum = pHeartbeat->numOfQueries;
+  int allocedStreamsNum = pHeartbeat->numOfStreams;
+  
+  pHeartbeat->numOfQueries = 0;
+  SQueryDesc *pQdesc = (SQueryDesc *)pHeartbeat->pData;
 
   // We extract the lock to tscBuildHeartBeatMsg function.
-  /* pthread_mutex_lock (&pObj->mutex); */
 
-  pMsg += sizeof(SQList);
   SSqlObj *pSql = pObj->sqlList;
   while (pSql) {
     /*
@@ -210,48 +238,46 @@ char *tscBuildQueryStreamDesc(char *pMsg, STscObj *pObj) {
       continue;
     }
 
-    strncpy(pQdesc->sql, pSql->sqlstr, TSDB_SHOW_SQL_LEN - 1);
-    pQdesc->sql[TSDB_SHOW_SQL_LEN - 1] = 0;
-    pQdesc->stime = pSql->stime;
-    pQdesc->queryId = pSql->queryId;
-    pQdesc->useconds = pSql->res.useconds;
+    tstrncpy(pQdesc->sql, pSql->sqlstr, sizeof(pQdesc->sql));
+    pQdesc->stime = htobe64(pSql->stime);
+    pQdesc->queryId = htonl(pSql->queryId);
+    pQdesc->useconds = htobe64(pSql->res.useconds);
 
-    pQList->numOfQueries++;
+    pHeartbeat->numOfQueries++;
     pQdesc++;
     pSql = pSql->next;
-    pMsg += sizeof(SQDesc);
-    if (pMsg > pMax) break;
+    if (pHeartbeat->numOfQueries >= allocedQueriesNum) break;
   }
 
-  SSList *pSList = (SSList *)pMsg;
-  SSDesc *pSdesc = pSList->sdesc;
-  pSList->numOfStreams = 0;
+  pHeartbeat->numOfStreams = 0;
+  SStreamDesc *pSdesc = (SStreamDesc *)pQdesc;
 
-  pMsg += sizeof(SSList);
   SSqlStream *pStream = pObj->streamList;
   while (pStream) {
-    strncpy(pSdesc->sql, pStream->pSql->sqlstr, TSDB_SHOW_SQL_LEN - 1);
-    pSdesc->sql[TSDB_SHOW_SQL_LEN - 1] = 0;
-    pSdesc->streamId = pStream->streamId;
-    pSdesc->num = pStream->num;
+    tstrncpy(pSdesc->sql, pStream->pSql->sqlstr, sizeof(pSdesc->sql));
+    pSdesc->streamId = htonl(pStream->streamId);
+    pSdesc->num = htobe64(pStream->num);
 
-    pSdesc->useconds = pStream->useconds;
-    pSdesc->stime = pStream->stime - pStream->interval;
-    pSdesc->ctime = pStream->ctime;
+    pSdesc->useconds = htobe64(pStream->useconds);
+    pSdesc->stime = htobe64(pStream->stime - pStream->interval);
+    pSdesc->ctime = htobe64(pStream->ctime);
 
-    pSdesc->slidingTime = pStream->slidingTime;
-    pSdesc->interval = pStream->interval;
+    pSdesc->slidingTime = htobe64(pStream->slidingTime);
+    pSdesc->interval = htobe64(pStream->interval);
 
-    pSList->numOfStreams++;
+    pHeartbeat->numOfStreams++;
     pSdesc++;
     pStream = pStream->next;
-    pMsg += sizeof(SSDesc);
-    if (pMsg > pMax) break;
+    if (pHeartbeat->numOfStreams >= allocedStreamsNum) break;
   }
 
-  /* pthread_mutex_unlock (&pObj->mutex); */
+  int32_t msgLen = pHeartbeat->numOfQueries * sizeof(SQueryDesc) + pHeartbeat->numOfStreams * sizeof(SStreamDesc) +
+                   sizeof(SCMHeartBeatMsg);
+  pHeartbeat->connId = htonl(pObj->connId);
+  pHeartbeat->numOfQueries = htonl(pHeartbeat->numOfQueries);
+  pHeartbeat->numOfStreams = htonl(pHeartbeat->numOfStreams);
 
-  return pMsg;
+  return msgLen;
 }
 
 void tscKillConnection(STscObj *pObj) {
@@ -259,19 +285,19 @@ void tscKillConnection(STscObj *pObj) {
 
   SSqlObj *pSql = pObj->sqlList;
   while (pSql) {
-    taosStopRpcConn(pSql->thandle);
+    //taosStopRpcConn(pSql->thandle);
     pSql = pSql->next;
   }
 
   SSqlStream *pStream = pObj->streamList;
   while (pStream) {
+    SSqlStream *tmp = pStream->next;
     taos_close_stream(pStream);
-    pStream = pStream->next;
+    pStream = tmp;
   }
 
   pthread_mutex_unlock(&pObj->mutex);
 
+  tscDebug("connection:%p is killed", pObj);
   taos_close(pObj);
-
-  tscTrace("connection:%p is killed", pObj);
 }

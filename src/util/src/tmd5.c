@@ -37,7 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "tsdb.h"
+#include "taosdef.h"
 
 /* forward declaration */
 static void Transform(uint32_t *buf, uint32_t *in);
@@ -88,10 +88,9 @@ static uint8_t PADDING[64] = {0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x
    mdContext. All fields are set to zero.
  */
 void MD5Init(MD5_CTX *mdContext) {
-  mdContext->i[0] = mdContext->i[1] = (uint32_t)0;
+  memset(mdContext, 0, sizeof(MD5_CTX));
 
-  /* Load magic initialization constants.
-   */
+  /* Load magic initialization constants. */
   mdContext->buf[0] = (uint32_t)0x67452301;
   mdContext->buf[1] = (uint32_t)0xefcdab89;
   mdContext->buf[2] = (uint32_t)0x98badcfe;

@@ -1,4 +1,7 @@
-char version[64] = "1.6.0.0";
-char compatible_version[64] = "1.6.0.0";
-char gitinfo[128] = "82cbce3261d06ab37c3bd4786c7b2e3d2316c42a";
-char buildinfo[512] = "Built by ubuntu at 2019-07-05 18:42";
+char version[12] = "2.0.0.0";
+char compatible_version[12] = "2.0.0.0";
+char gitinfo[48] = "8df8b7d9930342dd34ba13df160a7d538fad7bc7";
+char gitinfoOfInternal[48] = "bad4f040145fba581d1ab0c5dd718a5ede3e209f";
+char buildinfo[64] = "Built by root at 2020-08-03 17:23";
+
+void libtaos_2_0_0_0_Linux_x64() {};
