@@ -32,7 +32,14 @@ function buildTDengine {
 		echo "repo need to pull"
     git reset --hard
 		git pull
+  fi
 
+  [ -d $TDENGINE_DIR/debug ] || mkdir $TDENGINE_DIR/debug
+  cd $TDENGINE_DIR/debug
+  [ -f $TDENGINE_DIR/debug/build/bin/taosd ] || need_rebuild=true
+
+  if $need_rebuild ; then
+    echo "rebuild.."
 		LOCAL_COMMIT=`git rev-parse --short @`
 
 		rm -rf *
@@ -46,10 +53,9 @@ function buildTDengine {
 function runGeneralCaseOneByOne {
 	while read -r line; do
 		if [[ $line =~ ^./test.sh* ]]; then
-			general_case=`echo $line | grep -w general`
+			case=`echo $line | grep sim$ |awk '{print $NF}'`
 
-			if [ -n "$general_case" ]; then
-				case=`echo $line |grep general| awk '{print $NF}'`
+			if [ -n "$case" ]; then
 				./test.sh -f $case > /dev/null 2>&1 && \
 				echo -e "${GREEN}$case success${NC}" | tee -a $TDENGINE_COVERAGE_REPORT || \
 				echo -e "${RED}$case failed${NC}" | tee -a $TDENGINE_COVERAGE_REPORT
@@ -68,21 +74,36 @@ function runTest {
 
 	runGeneralCaseOneByOne jenkins/basic.txt
 
-	totalSuccess=`grep 'success' $TDENGINE_COVERAGE_REPORT | wc -l`
+	sed -i "1i\SIM cases test result" $TDENGINE_COVERAGE_REPORT
 
+	totalSuccess=`grep 'success' $TDENGINE_COVERAGE_REPORT | wc -l`
 	if [ "$totalSuccess" -gt "0" ]; then
-		echo -e "\n${GREEN} ### Total $totalSuccess coverage test case(s) succeed! ### ${NC}" | tee -a $TDENGINE_COVERAGE_REPORT
+		sed -i -e "2i\ ### Total $totalSuccess SIM test case(s) succeed! ###"  $TDENGINE_COVERAGE_REPORT
 	fi
 
 	totalFailed=`grep 'failed\|fault' $TDENGINE_COVERAGE_REPORT | wc -l`
 	if [ "$totalFailed" -ne "0" ]; then
-		echo -e "${RED} ### Total $totalFailed coverage test case(s) failed! ### ${NC}\n" | tee -a $TDENGINE_COVERAGE_REPORT
-#  exit $totalPyFailed
+		sed -i '3i\### Total $totalFailed SIM test case(s) failed! ###'  $TDENGINE_COVERAGE_REPORT
+	else
+		sed -i '3i\\n'  $TDENGINE_COVERAGE_REPORT
 	fi
 
 	cd $TDENGINE_DIR/tests
 	rm -rf ../sim
 	./test-all.sh full python | tee -a $TDENGINE_COVERAGE_REPORT
+	
+	sed -i "4i\Python cases test result" $TDENGINE_COVERAGE_REPORT
+	totalPySuccess=`grep 'python case(s) succeed!' $TDENGINE_COVERAGE_REPORT | awk '{print $4}'`
+	if [ "$totalPySuccess" -gt "0" ]; then
+                sed -i -e "5i\ ### Total $totalPySuccess Python test case(s) succeed! ###"  $TDENGINE_COVERAGE_REPORT
+        fi
+
+	totalPyFailed=`grep 'python case(s) failed!' $TDENGINE_COVERAGE_REPORT | awk '{print $4}'`
+        if [ -z $totalPyFailed ]; then
+		sed -i '6i\\n'  $TDENGINE_COVERAGE_REPORT
+        else
+		sed -i '6i\### Total $totalPyFailed Python test case(s) failed! ###'  $TDENGINE_COVERAGE_REPORT
+        fi
 
 	# Test Connector
 	stopTaosd
@@ -90,14 +111,14 @@ function runTest {
 	sleep 10
 
 	cd $TDENGINE_DIR/src/connector/jdbc
-	mvn clean package
-	mvn test | tee -a $TDENGINE_COVERAGE_REPORT
+	mvn clean package > /dev/null 2>&1
+	mvn test > /dev/null 2>&1 | tee -a $TDENGINE_COVERAGE_REPORT
 
 	# Test C Demo
 	stopTaosd
 	$TDENGINE_DIR/debug/build/bin/taosd -c $TDENGINE_DIR/debug/test/cfg > /dev/null &
 	sleep 10
-	yes | $TDENGINE_DIR/debug/build/bin/demo 127.0.0.1 | tee -a $TDENGINE_COVERAGE_REPORT
+	yes | $TDENGINE_DIR/debug/build/bin/demo 127.0.0.1 > /dev/null 2>&1 | tee -a $TDENGINE_COVERAGE_REPORT
 
 	# Test waltest
 	dataDir=`grep dataDir $TDENGINE_DIR/debug/test/cfg/taos.cfg|awk '{print $2}'`
@@ -105,14 +126,14 @@ function runTest {
 	echo "dataDir: $dataDir" | tee -a $TDENGINE_COVERAGE_REPORT
 	echo "walDir: $walDir" | tee -a $TDENGINE_COVERAGE_REPORT
 	if [ -n "$walDir" ]; then
-		yes | $TDENGINE_DIR/debug/build/bin/waltest -p $walDir | tee -a $TDENGINE_COVERAGE_REPORT
+		yes | $TDENGINE_DIR/debug/build/bin/waltest -p $walDir > dev/null 2>&1 | tee -a $TDENGINE_COVERAGE_REPORT
 	fi
 
   # run Unit Test
   echo "Run Unit Test: utilTest, queryTest and cliTest"
-  $TDENGINE_DIR/debug/build/bin/utilTest > /dev/null && echo "utilTest pass!" || echo "utilTest failed!"
-  $TDENGINE_DIR/debug/build/bin/queryTest > /dev/null && echo "queryTest pass!" || echo "queryTest failed!"
-  $TDENGINE_DIR/debug/build/bin/cliTest > /dev/null && echo "cliTest pass!" || echo "cliTest failed!"
+  $TDENGINE_DIR/debug/build/bin/utilTest > /dev/null 2>&1 && echo "utilTest pass!" || echo "utilTest failed!"
+  $TDENGINE_DIR/debug/build/bin/queryTest > /dev/null 2>&1 && echo "queryTest pass!" || echo "queryTest failed!"
+  $TDENGINE_DIR/debug/build/bin/cliTest > /dev/null 2>&1 && echo "cliTest pass!" || echo "cliTest failed!"
 
 	stopTaosd
 }

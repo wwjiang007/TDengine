@@ -65,7 +65,7 @@ int32_t mnodeInitShow() {
   mnodeAddReadMsgHandle(TSDB_MSG_TYPE_CM_CONNECT, mnodeProcessConnectMsg);
   mnodeAddReadMsgHandle(TSDB_MSG_TYPE_CM_USE_DB, mnodeProcessUseMsg);
   
-  tsMnodeShowCache = taosCacheInit(TSDB_DATA_TYPE_BIGINT, 5, false, mnodeFreeShowObj, "show");
+  tsMnodeShowCache = taosCacheInit(TSDB_CACHE_PTR_KEY, 5, true, mnodeFreeShowObj, "show");
   return 0;
 }
 
@@ -98,7 +98,7 @@ static char *mnodeGetShowType(int32_t showType) {
     case TSDB_MGMT_TABLE_MODULE:  return "show modules";
     case TSDB_MGMT_TABLE_QUERIES: return "show queries";
     case TSDB_MGMT_TABLE_STREAMS: return "show streams";
-    case TSDB_MGMT_TABLE_CONFIGS: return "show configs";
+    case TSDB_MGMT_TABLE_VARIABLES: return "show configs";
     case TSDB_MGMT_TABLE_CONNS:   return "show connections";
     case TSDB_MGMT_TABLE_SCORES:  return "show scores";
     case TSDB_MGMT_TABLE_GRANTS:  return "show grants";
@@ -186,7 +186,7 @@ static int32_t mnodeProcessRetrieveMsg(SMnodeMsg *pMsg) {
     rowsToRead = pShow->numOfRows - pShow->numOfReads;
   }
 
-  /* return no more than 100 meters in one round trip */
+  /* return no more than 100 tables in one round trip */
   if (rowsToRead > 100) rowsToRead = 100;
 
   /*
@@ -244,7 +244,8 @@ static int32_t mnodeProcessHeartBeatMsg(SMnodeMsg *pMsg) {
   int32_t connId = htonl(pHBMsg->connId);
   SConnObj *pConn = mnodeAccquireConn(connId, connInfo.user, connInfo.clientIp, connInfo.clientPort);
   if (pConn == NULL) {
-    pConn = mnodeCreateConn(connInfo.user, connInfo.clientIp, connInfo.clientPort);
+    pHBMsg->pid = htonl(pHBMsg->pid);
+    pConn = mnodeCreateConn(connInfo.user, connInfo.clientIp, connInfo.clientPort, pHBMsg->pid, pHBMsg->appName);
   }
 
   if (pConn == NULL) {
@@ -302,7 +303,7 @@ static int32_t mnodeProcessConnectMsg(SMnodeMsg *pMsg) {
   SAcctObj *pAcct = pUser->pAcct;
 
   if (pConnectMsg->db[0]) {
-    char dbName[TSDB_TABLE_ID_LEN * 3] = {0};
+    char dbName[TSDB_TABLE_FNAME_LEN * 3] = {0};
     sprintf(dbName, "%x%s%s", pAcct->acctId, TS_PATH_DELIMITER, pConnectMsg->db);
     SDbObj *pDb = mnodeGetDb(dbName);
     if (pDb == NULL) {
@@ -313,6 +314,7 @@ static int32_t mnodeProcessConnectMsg(SMnodeMsg *pMsg) {
     if (pDb->status != TSDB_DB_STATUS_READY) {
       mError("db:%s, status:%d, in dropping", pDb->name, pDb->status);
       code = TSDB_CODE_MND_DB_IN_DROPPING;
+      mnodeDecDbRef(pDb);
       goto connect_over;
     }
     mnodeDecDbRef(pDb);
@@ -324,7 +326,8 @@ static int32_t mnodeProcessConnectMsg(SMnodeMsg *pMsg) {
     goto connect_over;
   }
 
-  SConnObj *pConn = mnodeCreateConn(connInfo.user, connInfo.clientIp, connInfo.clientPort);
+  pConnectMsg->pid = htonl(pConnectMsg->pid);
+  SConnObj *pConn = mnodeCreateConn(connInfo.user, connInfo.clientIp, connInfo.clientPort, pConnectMsg->pid, pConnectMsg->appName);
   if (pConn == NULL) {
     code = terrno;
   } else {
@@ -377,7 +380,8 @@ static bool mnodeCheckShowFinished(SShowObj *pShow) {
 }
 
 static bool mnodeAccquireShowObj(SShowObj *pShow) {
-  SShowObj **ppShow = taosCacheAcquireByKey(tsMnodeShowCache, &pShow, sizeof(int64_t));
+  TSDB_CACHE_PTR_TYPE handleVal = (TSDB_CACHE_PTR_TYPE)pShow;
+  SShowObj **ppShow = taosCacheAcquireByKey(tsMnodeShowCache, &handleVal, sizeof(TSDB_CACHE_PTR_TYPE));
   if (ppShow) {
     mDebug("%p, show is accquired from cache, data:%p, index:%d", pShow, ppShow, pShow->index);
     return true;
@@ -387,9 +391,12 @@ static bool mnodeAccquireShowObj(SShowObj *pShow) {
 }
 
 static void* mnodePutShowObj(SShowObj *pShow) {
+  const int32_t DEFAULT_SHOWHANDLE_LIFE_SPAN = tsShellActivityTimer * 6 * 1000;
+
   if (tsMnodeShowCache != NULL) {
     pShow->index = atomic_add_fetch_32(&tsShowObjIndex, 1);
-    SShowObj **ppShow = taosCachePut(tsMnodeShowCache, &pShow, sizeof(int64_t), &pShow, sizeof(int64_t), 6);
+    TSDB_CACHE_PTR_TYPE handleVal = (TSDB_CACHE_PTR_TYPE)pShow;
+    SShowObj **ppShow = taosCachePut(tsMnodeShowCache, &handleVal, sizeof(TSDB_CACHE_PTR_TYPE), &pShow, sizeof(TSDB_CACHE_PTR_TYPE), DEFAULT_SHOWHANDLE_LIFE_SPAN);
     pShow->ppShow = (void**)ppShow;
     mDebug("%p, show is put into cache, data:%p index:%d", pShow, ppShow, pShow->index);
     return pShow;

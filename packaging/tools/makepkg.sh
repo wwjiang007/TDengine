@@ -25,9 +25,9 @@ release_dir="${top_dir}/release"
 
 #package_name='linux'
 if [ "$verMode" == "cluster" ]; then
-    install_dir="${release_dir}/TDengine-enterprise-server"
+    install_dir="${release_dir}/TDengine-enterprise-server-${version}"
 else
-    install_dir="${release_dir}/TDengine-server"
+    install_dir="${release_dir}/TDengine-server-${version}"
 fi
 
 # Directories and files.
@@ -36,7 +36,7 @@ if [ "$pagMode" == "lite" ]; then
   strip ${build_dir}/bin/taos
   bin_files="${build_dir}/bin/taosd ${build_dir}/bin/taos ${script_dir}/remove.sh"
 else 
-  bin_files="${build_dir}/bin/taosd ${build_dir}/bin/taos ${build_dir}/bin/taosdemo ${build_dir}/bin/taosdump ${build_dir}/bin/tarbitrator ${script_dir}/remove.sh"
+  bin_files="${build_dir}/bin/taosd ${build_dir}/bin/taos ${build_dir}/bin/taosdemo ${build_dir}/bin/tarbitrator ${script_dir}/remove.sh ${script_dir}/set_core.sh"
 fi
 
 lib_files="${build_dir}/lib/libtaos.so.${version}"
@@ -113,6 +113,8 @@ if [[ "$pagMode" != "lite" ]] && [[ "$cpuType" != "aarch32" ]]; then
   cp -r ${examples_dir}/python ${install_dir}/examples
   cp -r ${examples_dir}/R      ${install_dir}/examples
   cp -r ${examples_dir}/go     ${install_dir}/examples
+  cp -r ${examples_dir}/nodejs ${install_dir}/examples
+  cp -r ${examples_dir}/C#     ${install_dir}/examples
 fi
 # Copy driver
 mkdir -p ${install_dir}/driver 
@@ -122,10 +124,11 @@ cp ${lib_files} ${install_dir}/driver
 connector_dir="${code_dir}/connector"
 mkdir -p ${install_dir}/connector
 if [[ "$pagMode" != "lite" ]] && [[ "$cpuType" != "aarch32" ]]; then
-  cp ${build_dir}/lib/*.jar      ${install_dir}/connector
-  cp -r ${connector_dir}/grafana ${install_dir}/connector/
-  cp -r ${connector_dir}/python  ${install_dir}/connector/
-  cp -r ${connector_dir}/go      ${install_dir}/connector
+  cp ${build_dir}/lib/*.jar            ${install_dir}/connector
+  cp -r ${connector_dir}/grafanaplugin ${install_dir}/connector/
+  cp -r ${connector_dir}/python        ${install_dir}/connector/
+  cp -r ${connector_dir}/go            ${install_dir}/connector
+  cp -r ${connector_dir}/nodejs        ${install_dir}/connector
 fi
 # Copy release note
 # cp ${script_dir}/release_note ${install_dir}
@@ -135,9 +138,9 @@ fi
 cd ${release_dir} 
 
 if [ "$verMode" == "cluster" ]; then
-  pkg_name=${install_dir}-${version}-${osType}-${cpuType}
+  pkg_name=${install_dir}-${osType}-${cpuType}
 elif [ "$verMode" == "edge" ]; then
-  pkg_name=${install_dir}-${version}-${osType}-${cpuType}
+  pkg_name=${install_dir}-${osType}-${cpuType}
 else
   echo "unknow verMode, nor cluster or edge"
   exit 1

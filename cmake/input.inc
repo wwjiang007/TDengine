@@ -22,6 +22,16 @@ IF (${PAGMODE} MATCHES "lite")
   MESSAGE(STATUS "Build with pagmode lite")
 ENDIF ()
 
+IF (${SOMODE} MATCHES "static")
+  SET(TD_SOMODE_STATIC TRUE)
+  MESSAGE(STATUS "Link so using static mode")
+ENDIF ()
+
+IF (${DBNAME} MATCHES "power")
+  SET(TD_POWER TRUE)
+  MESSAGE(STATUS "power is true")
+ENDIF ()
+
 IF (${DLLTYPE} MATCHES "go")
   SET(TD_GODLL TRUE)
   MESSAGE(STATUS "input dll type: " ${DLLTYPE})
@@ -30,6 +40,16 @@ ENDIF ()
 IF (${MEM_CHECK} MATCHES "true")
   SET(TD_MEM_CHECK TRUE)
   MESSAGE(STATUS "build with memory check")
+ENDIF ()
+
+IF (${MQTT} MATCHES "false")
+  SET(TD_MQTT FALSE)
+  MESSAGE(STATUS "build without mqtt module")
+ENDIF ()
+
+IF (${SYNC} MATCHES "false")
+  SET(TD_SYNC FALSE)
+  MESSAGE(STATUS "build without sync module")
 ENDIF ()
 
 IF (${RANDOM_FILE_FAIL} MATCHES "true")

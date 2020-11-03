@@ -30,7 +30,8 @@
 #include "tlocale.h"
 
 // global, not configurable
-void *  tscCacheHandle;
+SCacheObj*  tscMetaCache;
+SCacheObj*  tscObjCache;
 void *  tscTmr;
 void *  tscQhandle;
 void *  tscCheckDiskUsageTmr;
@@ -47,10 +48,8 @@ void tscCheckDiskUsage(void *UNUSED_PARAM(para), void* UNUSED_PARAM(param)) {
   taosTmrReset(tscCheckDiskUsage, 1000, NULL, tscTmr, &tscCheckDiskUsageTmr);
 }
 
-int32_t tscInitRpc(const char *user, const char *secret, void** pDnodeConn) {
+int32_t tscInitRpc(const char *user, const char *secretEncrypt, void **pDnodeConn) {
   SRpcInit rpcInit;
-  char secretEncrypt[32] = {0};
-  taosEncryptPass((uint8_t *)secret, strlen(secret), secretEncrypt);
 
   if (*pDnodeConn == NULL) {
     memset(&rpcInit, 0, sizeof(rpcInit));
@@ -60,11 +59,11 @@ int32_t tscInitRpc(const char *user, const char *secret, void** pDnodeConn) {
     rpcInit.cfp = tscProcessMsgFromServer;
     rpcInit.sessions = tsMaxConnections;
     rpcInit.connType = TAOS_CONN_CLIENT;
-    rpcInit.user = (char*)user;
+    rpcInit.user = (char *)user;
     rpcInit.idleTime = 2000;
     rpcInit.ckey = "key";
     rpcInit.spi = 1;
-    rpcInit.secret = secretEncrypt;
+    rpcInit.secret = (char *)secretEncrypt;
 
     *pDnodeConn = rpcOpen(&rpcInit);
     if (*pDnodeConn == NULL) {
@@ -78,7 +77,8 @@ int32_t tscInitRpc(const char *user, const char *secret, void** pDnodeConn) {
   return 0;
 }
 
-void taos_init_imp() {
+
+void taos_init_imp(void) {
   char temp[128];
   
   errno = TSDB_CODE_SUCCESS;
@@ -123,13 +123,11 @@ void taos_init_imp() {
   tscInitMsgsFp();
   int queueSize = tsMaxConnections*2;
 
-  if (tscEmbedded == 0) {
-    tscNumOfThreads = tsNumOfCores * tsNumOfThreadsPerCore / 2.0;
-  } else {
-    tscNumOfThreads = tsNumOfCores * tsNumOfThreadsPerCore / 4.0;
+  double factor = (tscEmbedded == 0)? 2.0:4.0;
+  tscNumOfThreads = (int)(tsNumOfCores * tsNumOfThreadsPerCore / factor);
+  if (tscNumOfThreads < 2) {
+    tscNumOfThreads = 2;
   }
-
-  if (tscNumOfThreads < 2) tscNumOfThreads = 2;
 
   tscQhandle = taosInitScheduler(queueSize, tscNumOfThreads, "tsc");
   if (NULL == tscQhandle) {
@@ -141,13 +139,11 @@ void taos_init_imp() {
   if(0 == tscEmbedded){
     taosTmrReset(tscCheckDiskUsage, 10, NULL, tscTmr, &tscCheckDiskUsageTmr);      
   }
-  
-  int64_t refreshTime = tsTableMetaKeepTimer;
-  refreshTime = refreshTime > 10 ? 10 : refreshTime;
-  refreshTime = refreshTime < 10 ? 10 : refreshTime;
 
-  if (tscCacheHandle == NULL) {
-    tscCacheHandle = taosCacheInit(TSDB_DATA_TYPE_BINARY, refreshTime, false, NULL, "tableMeta");
+  int64_t refreshTime = 10; // 10 seconds by default
+  if (tscMetaCache == NULL) {
+    tscMetaCache = taosCacheInit(TSDB_DATA_TYPE_BINARY, refreshTime, false, tscFreeTableMetaHelper, "tableMeta");
+    tscObjCache = taosCacheInit(TSDB_CACHE_PTR_KEY, refreshTime / 2, false, tscFreeRegisteredSqlObj, "sqlObj");
   }
 
   tscDebug("client is initialized successfully");
@@ -156,15 +152,20 @@ void taos_init_imp() {
 void taos_init() { pthread_once(&tscinit, taos_init_imp); }
 
 void taos_cleanup() {
-  if (tscCacheHandle != NULL) {
-    taosCacheCleanup(tscCacheHandle);
+  if (tscMetaCache != NULL) {
+    taosCacheCleanup(tscMetaCache);
+    tscMetaCache = NULL;
+
+    taosCacheCleanup(tscObjCache);
+    tscObjCache = NULL;
   }
   
   if (tscQhandle != NULL) {
     taosCleanUpScheduler(tscQhandle);
     tscQhandle = NULL;
   }
-  
+
+  taosCleanupKeywordsTable();
   taosCloseLog();
   
   taosTmrCleanUp(tscTmr);

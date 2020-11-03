@@ -149,7 +149,7 @@ JNIEXPORT void JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_initImp(JNIEnv *e
 JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_setOptions(JNIEnv *env, jobject jobj, jint optionIndex,
                                                                           jstring optionValue) {
   if (optionValue == NULL) {
-    jniDebug("option index:%d value is null", optionIndex);
+    jniDebug("option index:%d value is null", (int32_t)optionIndex);
     return 0;
   }
 
@@ -183,7 +183,7 @@ JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_setOptions(JNIEnv
     }
     (*env)->ReleaseStringUTFChars(env, optionValue, tz1);
   } else {
-    jniError("option index:%d is not found", optionIndex);
+    jniError("option index:%d is not found", (int32_t)optionIndex);
   }
 
   return res;
@@ -224,13 +224,13 @@ JNIEXPORT jlong JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_connectImp(JNIEn
    */
   tsNumOfThreadsPerCore = 0.0;
 
-  ret = (jlong)taos_connect((char *)host, (char *)user, (char *)pass, (char *)dbname, jport);
+  ret = (jlong)taos_connect((char *)host, (char *)user, (char *)pass, (char *)dbname, (uint16_t)jport);
   if (ret == 0) {
     jniError("jobj:%p, conn:%p, connect to database failed, host=%s, user=%s, dbname=%s, port=%d", jobj, (void *)ret,
-             (char *)host, (char *)user, (char *)dbname, jport);
+             (char *)host, (char *)user, (char *)dbname, (int32_t)jport);
   } else {
     jniDebug("jobj:%p, conn:%p, connect to database succeed, host=%s, user=%s, dbname=%s, port=%d", jobj, (void *)ret,
-             (char *)host, (char *)user, (char *)dbname, jport);
+             (char *)host, (char *)user, (char *)dbname, (int32_t)jport);
   }
 
   if (host != NULL) (*env)->ReleaseStringUTFChars(env, jhost, host);
@@ -327,13 +327,30 @@ JNIEXPORT jlong JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_getResultSetImp(
   STscObj *pObj = pSql->pTscObj;
 
   if (tscIsUpdateQuery(pSql)) {
-    // taos_free_result(pSql);  // free result here
-    jniDebug("jobj:%p, conn:%p, no resultset, %p", jobj, pObj, (void *)tres);
-    return 0;
+    jniDebug("jobj:%p, conn:%p, update query, no resultset, %p", jobj, pObj, (void *)tres);
   } else {
     jniDebug("jobj:%p, conn:%p, get resultset, %p", jobj, pObj, (void *)tres);
-    return tres;
   }
+
+  return tres;
+}
+
+JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_isUpdateQueryImp(JNIEnv *env, jobject jobj, jlong con,
+                                                                                jlong tres) {
+  TAOS *tscon = (TAOS *)con;
+  if (tscon == NULL) {
+    jniError("jobj:%p, connection is closed", jobj);
+    return JNI_CONNECTION_NULL;
+  }
+
+  if ((void *)tres == NULL) {
+    jniError("jobj:%p, conn:%p, resultset is null", jobj, tscon);
+    return JNI_RESULT_SET_NULL;
+  }
+
+  SSqlObj *pSql = (TAOS_RES *)tres;
+
+  return (tscIsUpdateQuery(pSql)? 1:0);
 }
 
 JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_freeResultSetImp(JNIEnv *env, jobject jobj, jlong con,
@@ -368,7 +385,7 @@ JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_getAffectedRowsIm
   }
 
   jint ret = taos_affected_rows((SSqlObj *)res);
-  jniDebug("jobj:%p, conn:%p, sql:%p, res: %p, affect rows:%d", jobj, tscon, (void *)con, (void *)res, ret);
+  jniDebug("jobj:%p, conn:%p, sql:%p, res: %p, affect rows:%d", jobj, tscon, (void *)con, (void *)res, (int32_t)ret);
 
   return ret;
 }
@@ -420,13 +437,8 @@ JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_getSchemaMetaData
  * @return
  */
 jstring jniFromNCharToByteArray(JNIEnv *env, char *nchar, int32_t maxBytes) {
-  int len = (int)strlen(nchar);
-  if (len > maxBytes) {  // no terminated symbol exists '\0'
-    len = maxBytes;
-  }
-
-  jbyteArray bytes = (*env)->NewByteArray(env, len);
-  (*env)->SetByteArrayRegion(env, bytes, 0, len, (jbyte *)nchar);
+  jbyteArray bytes = (*env)->NewByteArray(env, maxBytes);
+  (*env)->SetByteArrayRegion(env, bytes, 0, maxBytes, (jbyte *)nchar);
   return bytes;
 }
 
@@ -464,6 +476,8 @@ JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_fetchRowImp(JNIEn
     }
   }
 
+  int32_t* length = taos_fetch_lengths(result);
+
   char tmp[TSDB_MAX_BYTES_PER_ROW] = {0};
 
   for (int i = 0; i < num_fields; i++) {
@@ -476,13 +490,13 @@ JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_fetchRowImp(JNIEn
         (*env)->CallVoidMethod(env, rowobj, g_rowdataSetBooleanFp, i, (jboolean)(*((char *)row[i]) == 1));
         break;
       case TSDB_DATA_TYPE_TINYINT:
-        (*env)->CallVoidMethod(env, rowobj, g_rowdataSetByteFp, i, (jbyte) * ((char *)row[i]));
+        (*env)->CallVoidMethod(env, rowobj, g_rowdataSetByteFp, i, (jbyte) * ((int8_t *)row[i]));
         break;
       case TSDB_DATA_TYPE_SMALLINT:
-        (*env)->CallVoidMethod(env, rowobj, g_rowdataSetShortFp, i, (jshort) * ((short *)row[i]));
+        (*env)->CallVoidMethod(env, rowobj, g_rowdataSetShortFp, i, (jshort) * ((int16_t *)row[i]));
         break;
       case TSDB_DATA_TYPE_INT:
-        (*env)->CallVoidMethod(env, rowobj, g_rowdataSetIntFp, i, (jint) * (int *)row[i]);
+        (*env)->CallVoidMethod(env, rowobj, g_rowdataSetIntFp, i, (jint) * (int32_t *)row[i]);
         break;
       case TSDB_DATA_TYPE_BIGINT:
         (*env)->CallVoidMethod(env, rowobj, g_rowdataSetLongFp, i, (jlong) * ((int64_t *)row[i]));
@@ -498,15 +512,15 @@ JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_fetchRowImp(JNIEn
         (*env)->CallVoidMethod(env, rowobj, g_rowdataSetDoubleFp, i, (jdouble)dv);
       } break;
       case TSDB_DATA_TYPE_BINARY: {
-        strncpy(tmp, row[i], (size_t)fields[i].bytes);  // handle the case that terminated does not exist
+        memcpy(tmp, row[i], length[i]);  // handle the case that terminated does not exist
         (*env)->CallVoidMethod(env, rowobj, g_rowdataSetStringFp, i, (*env)->NewStringUTF(env, tmp));
 
-        memset(tmp, 0, (size_t)fields[i].bytes);
+        memset(tmp, 0, length[i]);
         break;
       }
       case TSDB_DATA_TYPE_NCHAR: {
         (*env)->CallVoidMethod(env, rowobj, g_rowdataSetByteArrayFp, i,
-                               jniFromNCharToByteArray(env, (char *)row[i], fields[i].bytes));
+                               jniFromNCharToByteArray(env, (char *)row[i], length[i]));
         break;
       }
       case TSDB_DATA_TYPE_TIMESTAMP:
@@ -583,7 +597,7 @@ JNIEXPORT jlong JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_consumeImp(JNIEn
     return 0l;
   }
 
-  return (long)res;
+  return (jlong)res;
 }
 
 JNIEXPORT void JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_unsubscribeImp(JNIEnv *env, jobject jobj, jlong sub,

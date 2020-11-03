@@ -10,8 +10,6 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Properties;
 
-import static org.junit.Assert.assertTrue;
-
 public class SubscribeTest extends BaseTest {
     Connection connection = null;
     Statement statement = null;
@@ -32,8 +30,7 @@ public class SubscribeTest extends BaseTest {
         properties.setProperty(TSDBDriver.PROPERTY_KEY_CHARSET, "UTF-8");
         properties.setProperty(TSDBDriver.PROPERTY_KEY_LOCALE, "en_US.UTF-8");
         properties.setProperty(TSDBDriver.PROPERTY_KEY_TIME_ZONE, "UTC-8");
-        connection = DriverManager.getConnection("jdbc:TAOS://" + host + ":0/" + "?user=root&password=taosdata"
-                , properties);
+        connection = DriverManager.getConnection("jdbc:TAOS://" + host + ":0/", properties);
 
         statement = connection.createStatement();
         statement.executeUpdate("create database if not exists " + dbName);
@@ -41,27 +38,24 @@ public class SubscribeTest extends BaseTest {
         long ts = System.currentTimeMillis();
         for (int i = 0; i < 2; i++) {
             ts += i;
-            statement.executeUpdate("insert into \" + dbName + \".\" + tName + \" values (" + ts + ", " + (100 + i) + ", " + i + ")");
+            String sql = "insert into " + dbName + "." + tName + " values (" + ts + ", " + (100 + i) + ", " + i + ")";
+            statement.executeUpdate(sql);
         }
     }
 
     @Test
     public void subscribe() throws Exception {
         TSDBSubscribe subscribe = null;
-        long subscribId = 0;
         try {
 
             String rawSql = "select * from " + dbName + "." + tName + ";";
             System.out.println(rawSql);
-            subscribe = ((TSDBConnection) connection).createSubscribe();
-            subscribId = subscribe.subscribe(topic, rawSql, false, 1000);
-
-            assertTrue(subscribId > 0);
+            subscribe = ((TSDBConnection) connection).subscribe(topic, rawSql, false);
 
             int a = 0;
             while (true) {
                 Thread.sleep(900);
-                TSDBResultSet resSet = subscribe.consume(subscribId);
+                TSDBResultSet resSet = subscribe.consume();
 
                 while (resSet.next()) {
                     for (int i = 1; i <= resSet.getMetaData().getColumnCount(); i++) {
@@ -78,8 +72,8 @@ public class SubscribeTest extends BaseTest {
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
-            if (null != subscribe && 0 != subscribId) {
-                subscribe.unsubscribe(subscribId, true);
+            if (null != subscribe) {
+                subscribe.close(true);
             }
         }
     }

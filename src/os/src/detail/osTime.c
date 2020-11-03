@@ -61,8 +61,15 @@ int64_t user_mktime64(const unsigned int year0, const unsigned int mon0,
   res  = res*24;
   res  = ((res + hour) * 60 + min) * 60 + sec;
 
+#ifdef _MSC_VER
+#if _MSC_VER >= 1900
+  int64_t timezone = _timezone;
+#endif
+#endif
+
   return (res + timezone);
 }
+
 // ==== mktime() kernel code =================//
 static int64_t m_deltaUtc = 0;
 void deltaToUtcInitOnce() {  
@@ -165,7 +172,7 @@ int32_t parseTimezone(char* str, int64_t* tzOffset) {
 
   char* sep = strchr(&str[i], ':');
   if (sep != NULL) {
-    int32_t len = sep - &str[i];
+    int32_t len = (int32_t)(sep - &str[i]);
 
     hour = strnatoi(&str[i], len);
     i += len + 1;
@@ -212,7 +219,8 @@ int32_t parseTimeWithTz(char* timestr, int64_t* time, int32_t timePrec) {
 
 /* mktime will be affected by TZ, set by using taos_options */
 #ifdef WINDOWS
-  int64_t seconds = gmtime(&tm); 
+  int64_t seconds = user_mktime64(tm.tm_year+1900, tm.tm_mon+1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+  //int64_t seconds = gmtime(&tm); 
 #else
   int64_t seconds = timegm(&tm);
 #endif
@@ -311,7 +319,9 @@ int32_t parseLocaltimeWithDst(char* timestr, int64_t* time, int32_t timePrec) {
   *time = factor * seconds + fraction;
   return 0;
 }
-static int32_t getTimestampInUsFromStrImpl(int64_t val, char unit, int64_t* result) {
+
+
+static int32_t getDurationInUs(int64_t val, char unit, int64_t* result) {
   *result = val;
 
   int64_t factor = 1000L;
@@ -332,19 +342,12 @@ static int32_t getTimestampInUsFromStrImpl(int64_t val, char unit, int64_t* resu
     case 'w':
       (*result) *= MILLISECOND_PER_WEEK*factor;
       break;
-    case 'n':
-      (*result) *= MILLISECOND_PER_MONTH*factor;
-      break;
-    case 'y':
-      (*result) *= MILLISECOND_PER_YEAR*factor;
-      break;
     case 'a':
       (*result) *= factor;
       break;
     case 'u':
       break;
     default: {
-      ;
       return -1;
     }
   }
@@ -363,7 +366,7 @@ static int32_t getTimestampInUsFromStrImpl(int64_t val, char unit, int64_t* resu
  * n - Months (30 days)
  * y - Years (365 days)
  */
-int32_t getTimestampInUsFromStr(char* token, int32_t tokenlen, int64_t* ts) {
+int32_t parseAbsoluteDuration(char* token, int32_t tokenlen, int64_t* duration) {
   errno = 0;
   char* endPtr = NULL;
 
@@ -373,7 +376,144 @@ int32_t getTimestampInUsFromStr(char* token, int32_t tokenlen, int64_t* ts) {
     return -1;
   }
 
-  return getTimestampInUsFromStrImpl(timestamp, token[tokenlen - 1], ts);
+  /* natual month/year are not allowed in absolute duration */
+  char unit = token[tokenlen - 1];
+  if (unit == 'n' || unit == 'y') {
+    return -1;
+  }
+
+  return getDurationInUs(timestamp, unit, duration);
+}
+
+int32_t parseNatualDuration(const char* token, int32_t tokenLen, int64_t* duration, char* unit) {
+  errno = 0;
+
+  /* get the basic numeric value */
+  *duration = strtoll(token, NULL, 10);
+  if (errno != 0) {
+    return -1;
+  }
+
+  *unit = token[tokenLen - 1];
+  if (*unit == 'n' || *unit == 'y') {
+    return 0;
+  }
+
+  return getDurationInUs(*duration, *unit, duration);
+}
+
+int64_t taosTimeAdd(int64_t t, int64_t duration, char unit, int32_t precision) {
+  if (duration == 0) {
+    return t;
+  }
+  if (unit == 'y') {
+    duration *= 12;
+  } else if (unit != 'n') {
+    return t + duration;
+  }
+
+  struct tm tm;
+  time_t tt = (time_t)(t / TSDB_TICK_PER_SECOND(precision));
+  localtime_r(&tt, &tm);
+  int mon = tm.tm_year * 12 + tm.tm_mon + (int)duration;
+  tm.tm_year = mon / 12;
+  tm.tm_mon = mon % 12;
+
+  return (int64_t)(mktime(&tm) * TSDB_TICK_PER_SECOND(precision));
+}
+
+int32_t taosTimeCountInterval(int64_t skey, int64_t ekey, int64_t interval, char unit, int32_t precision) {
+  if (ekey < skey) {
+    int64_t tmp = ekey;
+    ekey = skey;
+    skey = tmp;
+  }
+  if (unit != 'n' && unit != 'y') {
+    return (int32_t)((ekey - skey) / interval);
+  }
+
+  skey /= (int64_t)(TSDB_TICK_PER_SECOND(precision));
+  ekey /= (int64_t)(TSDB_TICK_PER_SECOND(precision));
+
+  struct tm tm;
+  time_t t = (time_t)skey;
+  localtime_r(&t, &tm);
+  int smon = tm.tm_year * 12 + tm.tm_mon;
+
+  t = (time_t)ekey;
+  localtime_r(&t, &tm);
+  int emon = tm.tm_year * 12 + tm.tm_mon;
+
+  if (unit == 'y') {
+    interval *= 12;
+  }
+
+  return (emon - smon) / (int32_t)interval;
+}
+
+int64_t taosTimeTruncate(int64_t t, const SInterval* pInterval, int32_t precision) {
+  if (pInterval->sliding == 0) {
+    assert(pInterval->interval == 0);
+    return t;
+  }
+
+  int64_t start = t;
+  if (pInterval->slidingUnit == 'n' || pInterval->slidingUnit == 'y') {
+    start /= (int64_t)(TSDB_TICK_PER_SECOND(precision));
+    struct tm tm;
+    time_t tt = (time_t)start;
+    localtime_r(&tt, &tm);
+    tm.tm_sec = 0;
+    tm.tm_min = 0;
+    tm.tm_hour = 0;
+    tm.tm_mday = 1;
+
+    if (pInterval->slidingUnit == 'y') {
+      tm.tm_mon = 0;
+      tm.tm_year = (int)(tm.tm_year / pInterval->sliding * pInterval->sliding);
+    } else {
+      int mon = tm.tm_year * 12 + tm.tm_mon;
+      mon = (int)(mon / pInterval->sliding * pInterval->sliding);
+      tm.tm_year = mon / 12;
+      tm.tm_mon = mon % 12;
+    }
+
+    start = (int64_t)(mktime(&tm) * TSDB_TICK_PER_SECOND(precision));
+  } else {
+    int64_t delta = t - pInterval->interval;
+    int32_t factor = (delta >= 0) ? 1 : -1;
+
+    start = (delta / pInterval->sliding + factor) * pInterval->sliding;
+
+    if (pInterval->intervalUnit == 'd' || pInterval->intervalUnit == 'w') {
+      /*
+      * here we revised the start time of day according to the local time zone,
+      * but in case of DST, the start time of one day need to be dynamically decided.
+      */
+      // todo refactor to extract function that is available for Linux/Windows/Mac platform
+  #if defined(WINDOWS) && _MSC_VER >= 1900
+      // see https://docs.microsoft.com/en-us/cpp/c-runtime-library/daylight-dstbias-timezone-and-tzname?view=vs-2019
+      int64_t timezone = _timezone;
+      int32_t daylight = _daylight;
+      char**  tzname = _tzname;
+  #endif
+
+      start += (int64_t)(timezone * TSDB_TICK_PER_SECOND(precision));
+    }
+
+    int64_t end = start + pInterval->interval - 1;
+    if (end < t) {
+      start += pInterval->sliding;
+    }
+  }
+
+  if (pInterval->offset > 0) {
+    start = taosTimeAdd(start, pInterval->offset, pInterval->offsetUnit, precision);
+    if (start > t) {
+      start = taosTimeAdd(start, -pInterval->interval, pInterval->intervalUnit, precision);
+    }
+  }
+  return start;
 }
 
 // internal function, when program is paused in debugger,
@@ -384,24 +524,38 @@ int32_t getTimestampInUsFromStr(char* token, int32_t tokenlen, int64_t* ts) {
 //     2020-07-03 17:48:42
 // and the parameter can also be a variable.
 const char* fmtts(int64_t ts) {
-  static char buf[32];
+  static char buf[96];
+  size_t pos = 0;
+  struct tm tm;
 
-  time_t tt;
   if (ts > -62135625943 && ts < 32503651200) {
-    tt = ts;
-  } else if (ts > -62135625943000 && ts < 32503651200000) {
-    tt = ts / 1000;
-  } else {
-    tt = ts / 1000000;
+    time_t t = (time_t)ts;
+    localtime_r(&t, &tm);
+    pos += strftime(buf + pos, sizeof(buf), "s=%Y-%m-%d %H:%M:%S", &tm);
   }
 
-  struct tm* ptm = localtime(&tt);
-  size_t pos = strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", ptm);
+  if (ts > -62135625943000 && ts < 32503651200000) {
+    time_t t = (time_t)(ts / 1000);
+    localtime_r(&t, &tm);
+    if (pos > 0) {
+      buf[pos++] = ' ';
+      buf[pos++] = '|';
+      buf[pos++] = ' ';
+    }
+    pos += strftime(buf + pos, sizeof(buf), "ms=%Y-%m-%d %H:%M:%S", &tm);
+    pos += sprintf(buf + pos, ".%03d", (int)(ts % 1000));
+  }
 
-  if (ts <= -62135625943000 || ts >= 32503651200000) {
-    sprintf(buf + pos, ".%06d", (int)(ts % 1000000));
-  } else if (ts <= -62135625943 || ts >= 32503651200) {
-    sprintf(buf + pos, ".%03d", (int)(ts % 1000));
+  {
+    time_t t = (time_t)(ts / 1000000);
+    localtime_r(&t, &tm);
+    if (pos > 0) {
+      buf[pos++] = ' ';
+      buf[pos++] = '|';
+      buf[pos++] = ' ';
+    }
+    pos += strftime(buf + pos, sizeof(buf), "us=%Y-%m-%d %H:%M:%S", &tm);
+    pos += sprintf(buf + pos, ".%06d", (int)(ts % 1000000));
   }
 
   return buf;

@@ -170,6 +170,7 @@ static void taosGetSystemTimezone() {
     
     fclose(f);
 
+    buf[sizeof(buf) - 1] = 0;
     char *lineEnd = strstr(buf, "\n");
     if (lineEnd != NULL) {
       *lineEnd = 0;
@@ -202,7 +203,7 @@ static void taosGetSystemTimezone() {
   snprintf(tsTimezone, TSDB_TIMEZONE_LEN, "%s (%s, %s%02d00)", buf, tzname[daylight], tz >= 0 ? "+" : "-", abs(tz));
 
   // cfg_timezone->cfgStatus = TAOS_CFG_CSTATUS_DEFAULT;
-  uInfo("timezone not configured, set to system default:%s", tsTimezone);
+  uWarn("timezone not configured, set to system default:%s", tsTimezone);
 }
 
 /*
@@ -234,7 +235,7 @@ static void taosGetSystemLocale() {  // get and set default locale
       strcpy(tsLocale, "en_US.UTF-8");
     } else {
       tstrncpy(tsLocale, locale, TSDB_LOCALE_LEN);
-      uError("locale not configured, set to system default:%s", tsLocale);
+      uWarn("locale not configured, set to system default:%s", tsLocale);
     }
   }
 
@@ -546,12 +547,12 @@ int taosSystem(const char *cmd) {
   int   res;
   char  buf[1024];
   if (cmd == NULL) {
-    uError("taosSystem cmd is NULL!\n");
+    uError("taosSystem cmd is NULL!");
     return -1;
   }
 
   if ((fp = popen(cmd, "r")) == NULL) {
-    uError("popen cmd:%s error: %s/n", cmd, strerror(errno));
+    uError("popen cmd:%s error: %s", cmd, strerror(errno));
     return -1;
   } else {
     while (fgets(buf, sizeof(buf), fp)) {
@@ -559,16 +560,15 @@ int taosSystem(const char *cmd) {
     }
 
     if ((res = pclose(fp)) == -1) {
-      uError("close popen file pointer fp error!\n");
+      uError("close popen file pointer fp error!");
     } else {
-      uDebug("popen res is :%d\n", res);
+      uDebug("popen res is :%d", res);
     }
 
     return res;
   }
 }
 
-int _sysctl(struct __sysctl_args *args );
 void taosSetCoreDump() {
   if (0 == tsEnableCoreFile) {
     return;
@@ -578,7 +578,11 @@ void taosSetCoreDump() {
   struct rlimit rlim;
   struct rlimit rlim_new;
   if (getrlimit(RLIMIT_CORE, &rlim) == 0) {
+    #ifndef _ALPINE
     uInfo("the old unlimited para: rlim_cur=%" PRIu64 ", rlim_max=%" PRIu64, rlim.rlim_cur, rlim.rlim_max);
+    #else
+    uInfo("the old unlimited para: rlim_cur=%llu, rlim_max=%llu", rlim.rlim_cur, rlim.rlim_max);
+    #endif
     rlim_new.rlim_cur = RLIM_INFINITY;
     rlim_new.rlim_max = RLIM_INFINITY;
     if (setrlimit(RLIMIT_CORE, &rlim_new) != 0) {
@@ -590,7 +594,11 @@ void taosSetCoreDump() {
   }
 
   if (getrlimit(RLIMIT_CORE, &rlim) == 0) {
+    #ifndef _ALPINE
     uInfo("the new unlimited para: rlim_cur=%" PRIu64 ", rlim_max=%" PRIu64, rlim.rlim_cur, rlim.rlim_max);
+    #else
+    uInfo("the new unlimited para: rlim_cur=%llu, rlim_max=%llu", rlim.rlim_cur, rlim.rlim_max);
+    #endif
   }
 
 #ifndef _TD_ARM_

@@ -32,14 +32,16 @@ void simpleTest() {
 
   // write 10 ts points
   int32_t num = 10;
-  int64_t tag = 1;
+  tVariant t = {0};
+  t.nType = TSDB_DATA_TYPE_BIGINT;
+  t.i64Key = 1;
 
   int64_t* list = createTsList(10, 10000000, 30);
-  tsBufAppend(pTSBuf, 0, tag, (const char*)list, num * sizeof(int64_t));
+  tsBufAppend(pTSBuf, 0, &t, (const char*)list, num * sizeof(int64_t));
   EXPECT_EQ(pTSBuf->tsOrder, TSDB_ORDER_ASC);
 
   EXPECT_EQ(pTSBuf->tsData.len, sizeof(int64_t) * num);
-  EXPECT_EQ(pTSBuf->block.tag, tag);
+  EXPECT_EQ(tVariantCompare(&pTSBuf->block.tag, &t), 0);
   EXPECT_EQ(pTSBuf->numOfVnodes, 1);
 
   tsBufFlush(pTSBuf);
@@ -47,6 +49,8 @@ void simpleTest() {
   EXPECT_EQ(pTSBuf->block.numOfElem, num);
 
   tsBufDestroy(pTSBuf);
+
+  free(list);
 }
 
 // one large list of ts, the ts list need to be split into several small blocks
@@ -55,14 +59,16 @@ void largeTSTest() {
 
   // write 10 ts points
   int32_t num = 1000000;
-  int64_t tag = 1;
+  tVariant t = {0};
+  t.nType = TSDB_DATA_TYPE_BIGINT;
+  t.i64Key = 1;
 
   int64_t* list = createTsList(num, 10000000, 30);
-  tsBufAppend(pTSBuf, 0, tag, (const char*)list, num * sizeof(int64_t));
+  tsBufAppend(pTSBuf, 0, &t, (const char*)list, num * sizeof(int64_t));
 
   // the data has been flush to disk, no data in cache
   EXPECT_EQ(pTSBuf->tsData.len, 0);
-  EXPECT_EQ(pTSBuf->block.tag, tag);
+  EXPECT_EQ(tVariantCompare(&pTSBuf->block.tag, &t), 0);
   EXPECT_EQ(pTSBuf->numOfVnodes, 1);
   EXPECT_EQ(pTSBuf->tsOrder, TSDB_ORDER_ASC);
 
@@ -71,20 +77,25 @@ void largeTSTest() {
   EXPECT_EQ(pTSBuf->block.numOfElem, num);
 
   tsBufDestroy(pTSBuf);
+  free(list);
 }
 
 void multiTagsTest() {
   STSBuf* pTSBuf = tsBufCreate(true, TSDB_ORDER_ASC);
 
   int32_t num = 10000;
-  int64_t tag = 1;
+  tVariant t = {0};
+  t.nType = TSDB_DATA_TYPE_BIGINT;
+
   int64_t start = 10000000;
   int32_t numOfTags = 50;
   int32_t step = 30;
 
   for (int32_t i = 0; i < numOfTags; ++i) {
     int64_t* list = createTsList(num, start, step);
-    tsBufAppend(pTSBuf, 0, i, (const char*)list, num * sizeof(int64_t));
+    t.i64Key = i;
+
+    tsBufAppend(pTSBuf, 0, &t, (const char*)list, num * sizeof(int64_t));
     free(list);
 
     start += step * num;
@@ -93,7 +104,7 @@ void multiTagsTest() {
   EXPECT_EQ(pTSBuf->tsOrder, TSDB_ORDER_ASC);
   EXPECT_EQ(pTSBuf->tsData.len, num * sizeof(int64_t));
 
-  EXPECT_EQ(pTSBuf->block.tag, numOfTags - 1);
+  EXPECT_EQ(pTSBuf->block.tag.i64Key, numOfTags - 1);
   EXPECT_EQ(pTSBuf->numOfVnodes, 1);
 
   tsBufFlush(pTSBuf);
@@ -115,9 +126,14 @@ void multiVnodeTagsTest() {
   for (int32_t j = 0; j < 20; ++j) {
     // vnodeId:0
     start = 10000000;
+    tVariant t = {0};
+    t.nType = TSDB_DATA_TYPE_BIGINT;
+
     for (int32_t i = 0; i < numOfTags; ++i) {
       int64_t* list = createTsList(num, start, step);
-      tsBufAppend(pTSBuf, j, i, (const char*)list, num * sizeof(int64_t));
+      t.i64Key = i;
+
+      tsBufAppend(pTSBuf, j, &t, (const char*)list, num * sizeof(int64_t));
       free(list);
 
       start += step * num;
@@ -128,11 +144,11 @@ void multiVnodeTagsTest() {
 
   EXPECT_EQ(pTSBuf->tsOrder, TSDB_ORDER_ASC);
   EXPECT_EQ(pTSBuf->tsData.len, num * sizeof(int64_t));
-  EXPECT_EQ(pTSBuf->block.tag, numOfTags - 1);
+  EXPECT_EQ(pTSBuf->block.tag.i64Key, numOfTags - 1);
 
   EXPECT_EQ(pTSBuf->tsData.len, num * sizeof(int64_t));
 
-  EXPECT_EQ(pTSBuf->block.tag, numOfTags - 1);
+  EXPECT_EQ(pTSBuf->block.tag.i64Key, numOfTags - 1);
 
   tsBufFlush(pTSBuf);
   EXPECT_EQ(pTSBuf->tsData.len, 0);
@@ -154,9 +170,14 @@ void loadDataTest() {
   for (int32_t j = 0; j < numOfVnode; ++j) {
     // vnodeId:0
     int64_t start = 10000000;
+    tVariant t = {0};
+    t.nType = TSDB_DATA_TYPE_BIGINT;
+
     for (int32_t i = 0; i < numOfTags; ++i) {
       int64_t* list = createTsList(num, start, step);
-      tsBufAppend(pTSBuf, j, i, (const char*)list, num * sizeof(int64_t));
+      t.i64Key = i;
+
+      tsBufAppend(pTSBuf, j, &t, (const char*)list, num * sizeof(int64_t));
       printf("%d - %" PRIu64 "\n", i, list[0]);
 
       free(list);
@@ -169,11 +190,11 @@ void loadDataTest() {
   EXPECT_EQ(pTSBuf->tsOrder, TSDB_ORDER_ASC);
 
   EXPECT_EQ(pTSBuf->tsData.len, num * sizeof(int64_t));
-  EXPECT_EQ(pTSBuf->block.tag, numOfTags - 1);
+  EXPECT_EQ(pTSBuf->block.tag.i64Key, numOfTags - 1);
 
   EXPECT_EQ(pTSBuf->tsData.len, num * sizeof(int64_t));
 
-  EXPECT_EQ(pTSBuf->block.tag, numOfTags - 1);
+  EXPECT_EQ(pTSBuf->block.tag.i64Key, numOfTags - 1);
 
   tsBufFlush(pTSBuf);
   EXPECT_EQ(pTSBuf->tsData.len, 0);
@@ -208,6 +229,8 @@ void loadDataTest() {
 
   int64_t e = taosGetTimestampUs();
   printf("end:%" PRIu64 ", elapsed:%" PRIu64 ", total obj:%d\n", e, e - s, x);
+  tsBufDestroy(pTSBuf);
+  tsBufDestroy(pNewBuf);
 }
 
 void randomIncTsTest() {}
@@ -225,16 +248,21 @@ void TSTraverse() {
   for (int32_t j = 0; j < numOfVnode; ++j) {
     // vnodeId:0
     int64_t start = 10000000;
+    tVariant t = {0};
+    t.nType = TSDB_DATA_TYPE_BIGINT;
+
     for (int32_t i = 0; i < numOfTags; ++i) {
       int64_t* list = createTsList(num, start, step);
-      tsBufAppend(pTSBuf, j, i, (const char*)list, num * sizeof(int64_t));
+      t.i64Key = i;
+
+      tsBufAppend(pTSBuf, j, &t, (const char*)list, num * sizeof(int64_t));
       printf("%d - %d - %" PRIu64 ", %" PRIu64 "\n", j, i, list[0], list[num - 1]);
 
       free(list);
       start += step * num;
 
       list = createTsList(num, start, step);
-      tsBufAppend(pTSBuf, j, i, (const char*)list, num * sizeof(int64_t));
+      tsBufAppend(pTSBuf, j, &t, (const char*)list, num * sizeof(int64_t));
       printf("%d - %d - %" PRIu64 ", %" PRIu64 "\n", j, i, list[0], list[num - 1]);
       free(list);
 
@@ -267,12 +295,16 @@ void TSTraverse() {
   int32_t startVnode = 1;
   int32_t startTag = 2;
 
-  tsBufGetElemStartPos(pTSBuf, startVnode, startTag);
+  tVariant t = {0};
+  t.nType = TSDB_DATA_TYPE_BIGINT;
+  t.i64Key = startTag;
+
+  tsBufGetElemStartPos(pTSBuf, startVnode, &t);
 
   int32_t totalOutput = 10;
   while (1) {
     STSElem elem = tsBufGetElem(pTSBuf);
-    printf("%d-%" PRIu64 "-%" PRIu64 "\n", elem.vnode, elem.tag, elem.ts);
+    printf("%d-%" PRIu64 "-%" PRIu64 "\n", elem.vnode, elem.tag.i64Key, elem.ts);
 
     if (!tsBufNextPos(pTSBuf)) {
       break;
@@ -281,7 +313,9 @@ void TSTraverse() {
     if (--totalOutput <= 0) {
       totalOutput = 10;
 
-      tsBufGetElemStartPos(pTSBuf, startVnode, --startTag);
+      startTag -= 1;
+      t.i64Key = startTag;
+      tsBufGetElemStartPos(pTSBuf, startVnode, &t);
 
       if (startTag == 0) {
         startVnode -= 1;
@@ -311,13 +345,14 @@ void TSTraverse() {
 
   startVnode = 1;
   startTag = 2;
+  t.i64Key = startTag;
 
-  tsBufGetElemStartPos(pTSBuf, startVnode, startTag);
+  tsBufGetElemStartPos(pTSBuf, startVnode, &t);
 
   totalOutput = 10;
   while (1) {
     STSElem elem = tsBufGetElem(pTSBuf);
-    printf("%d-%" PRIu64 "-%" PRIu64 "\n", elem.vnode, elem.tag, elem.ts);
+    printf("%d-%" PRIu64 "-%" PRIu64 "\n", elem.vnode, elem.tag.i64Key, elem.ts);
 
     if (!tsBufNextPos(pTSBuf)) {
       break;
@@ -326,7 +361,9 @@ void TSTraverse() {
     if (--totalOutput <= 0) {
       totalOutput = 10;
 
-      tsBufGetElemStartPos(pTSBuf, startVnode, --startTag);
+      startTag -= 1;
+      t.i64Key = startTag;
+      tsBufGetElemStartPos(pTSBuf, startVnode, &t);
 
       if (startTag < 0) {
         startVnode -= 1;
@@ -338,6 +375,8 @@ void TSTraverse() {
       }
     }
   }
+
+  tsBufDestroy(pTSBuf);
 }
 
 void performanceTest() {}
@@ -352,9 +391,12 @@ void invalidFileTest() {
 
   STSBuf* pNewBuf = tsBufCreateFromFile("/tmp/test", true);
   EXPECT_TRUE(pNewBuf == NULL);
+  tsBufDestroy(pNewBuf);
 
   pNewBuf = tsBufCreateFromFile("/tmp/911", true);
   EXPECT_TRUE(pNewBuf == NULL);
+
+  tsBufDestroy(pNewBuf);
 }
 
 void mergeDiffVnodeBufferTest() {
@@ -365,12 +407,17 @@ void mergeDiffVnodeBufferTest() {
   int32_t num = 1000;
   int32_t numOfTags = 10;
 
+  tVariant t = {0};
+  t.nType = TSDB_DATA_TYPE_BIGINT;
+
   // vnodeId:0
   int64_t start = 10000000;
   for (int32_t i = 0; i < numOfTags; ++i) {
     int64_t* list = createTsList(num, start, step);
-    tsBufAppend(pTSBuf1, 0, i, (const char*)list, num * sizeof(int64_t));
-    tsBufAppend(pTSBuf2, 0, i, (const char*)list, num * sizeof(int64_t));
+    t.i64Key = i;
+
+    tsBufAppend(pTSBuf1, 0, &t, (const char*)list, num * sizeof(int64_t));
+    tsBufAppend(pTSBuf2, 0, &t, (const char*)list, num * sizeof(int64_t));
 
     free(list);
 
@@ -393,6 +440,9 @@ void mergeIdenticalVnodeBufferTest() {
   STSBuf* pTSBuf1 = tsBufCreate(true, TSDB_ORDER_ASC);
   STSBuf* pTSBuf2 = tsBufCreate(true, TSDB_ORDER_ASC);
 
+  tVariant t = {0};
+  t.nType = TSDB_DATA_TYPE_BIGINT;
+
   int32_t step = 30;
   int32_t num = 1000;
   int32_t numOfTags = 10;
@@ -401,17 +451,21 @@ void mergeIdenticalVnodeBufferTest() {
   int64_t start = 10000000;
   for (int32_t i = 0; i < numOfTags; ++i) {
     int64_t* list = createTsList(num, start, step);
+    t.i64Key = i;
 
-    tsBufAppend(pTSBuf1, 12, i, (const char*)list, num * sizeof(int64_t));
+    tsBufAppend(pTSBuf1, 12, &t, (const char*)list, num * sizeof(int64_t));
     free(list);
 
     start += step * num;
   }
 
+
+
   for (int32_t i = numOfTags; i < numOfTags * 2; ++i) {
     int64_t* list = createTsList(num, start, step);
 
-    tsBufAppend(pTSBuf2, 77, i, (const char*)list, num * sizeof(int64_t));
+    t.i64Key = i;
+    tsBufAppend(pTSBuf2, 77, &t, (const char*)list, num * sizeof(int64_t));
     free(list);
 
     start += step * num;
@@ -428,7 +482,7 @@ void mergeIdenticalVnodeBufferTest() {
     STSElem elem = tsBufGetElem(pTSBuf1);
     EXPECT_EQ(elem.vnode, 12);
 
-    printf("%d-%" PRIu64 "-%" PRIu64 "\n", elem.vnode, elem.tag, elem.ts);
+    printf("%d-%" PRIu64 "-%" PRIu64 "\n", elem.vnode, elem.tag.i64Key, elem.ts);
   }
 
   tsBufDestroy(pTSBuf1);
@@ -436,6 +490,8 @@ void mergeIdenticalVnodeBufferTest() {
 }
 }  // namespace
 
+
+//TODO add binary tag value test case
 TEST(testCase, tsBufTest) {
   simpleTest();
   largeTSTest();
@@ -443,7 +499,7 @@ TEST(testCase, tsBufTest) {
   multiVnodeTagsTest();
   loadDataTest();
   invalidFileTest();
-  //  randomIncTsTest();
+//    randomIncTsTest();
   TSTraverse();
   mergeDiffVnodeBufferTest();
   mergeIdenticalVnodeBufferTest();

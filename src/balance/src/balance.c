@@ -118,6 +118,7 @@ static void balanceSwapVnodeGid(SVnodeGid *pVnodeGid1, SVnodeGid *pVnodeGid2) {
 }
 
 int32_t balanceAllocVnodes(SVgObj *pVgroup) {
+  static int32_t randIndex = 0;
   int32_t dnode = 0;
   int32_t vnodes = 0;
 
@@ -125,6 +126,8 @@ int32_t balanceAllocVnodes(SVgObj *pVgroup) {
 
   balanceAccquireDnodeList();
 
+  mDebug("db:%s, try alloc %d vnodes to vgroup, dnodes total:%d, avail:%d", pVgroup->dbName, pVgroup->numOfVnodes,
+         mnodeGetDnodesNum(), tsBalanceDnodeListSize);
   for (int32_t i = 0; i < pVgroup->numOfVnodes; ++i) {
     for (; dnode < tsBalanceDnodeListSize; ++dnode) {
       SDnodeObj *pDnode = tsBalanceDnodeList[dnode];
@@ -134,16 +137,32 @@ int32_t balanceAllocVnodes(SVgObj *pVgroup) {
         pVnodeGid->pDnode = pDnode;
         dnode++;
         vnodes++;
+        mDebug("dnode:%d, is selected, vnodeIndex:%d", pDnode->dnodeId, i);
         break;
+      } else {
+        mDebug("dnode:%d, is not selected, status:%s vnodes:%d disk:%fGB role:%d", pDnode->dnodeId,
+               mnodeGetDnodeStatusStr(pDnode->status), pDnode->openVnodes, pDnode->diskAvailable,
+               pDnode->alternativeRole);
       }
     }
   }
 
   if (vnodes != pVgroup->numOfVnodes) {
-    mDebug("vgId:%d, db:%s need vnodes:%d, but alloc:%d, free them", pVgroup->vgId, pVgroup->dbName,
-           pVgroup->numOfVnodes, vnodes);
     balanceReleaseDnodeList();
     balanceUnLock();
+
+    mDebug("db:%s, need vnodes:%d, but alloc:%d", pVgroup->dbName, pVgroup->numOfVnodes, vnodes);
+
+    void *     pIter = NULL;
+    SDnodeObj *pDnode = NULL;
+    while (1) {
+      pIter = mnodeGetNextDnode(pIter, &pDnode);
+      if (pDnode == NULL) break;
+      mDebug("dnode:%d, status:%s vnodes:%d disk:%fGB role:%d", pDnode->dnodeId, mnodeGetDnodeStatusStr(pDnode->status),
+             pDnode->openVnodes, pDnode->diskAvailable, pDnode->alternativeRole);
+      mnodeDecDnodeRef(pDnode);
+    }
+    sdbFreeIter(pIter);
 
     if (mnodeGetOnlineDnodesNum() == 0) {
       return TSDB_CODE_MND_NOT_READY;
@@ -160,11 +179,11 @@ int32_t balanceAllocVnodes(SVgObj *pVgroup) {
    */
   if (pVgroup->numOfVnodes == 1) {
   } else if (pVgroup->numOfVnodes == 2) {
-    if (rand() % 2 == 0) {
+    if (randIndex++ % 2 == 0) {
       balanceSwapVnodeGid(pVgroup->vnodeGid, pVgroup->vnodeGid + 1);
     }
   } else {
-    int32_t randVal = rand() % 6;
+    int32_t randVal = randIndex++ % 6;
     if (randVal == 1) {  // 1, 0, 2
       balanceSwapVnodeGid(pVgroup->vnodeGid + 0, pVgroup->vnodeGid + 1);
     } else if (randVal == 2) {  // 1, 2, 0
@@ -197,8 +216,8 @@ static bool balanceCheckVgroupReady(SVgObj *pVgroup, SVnodeGid *pRmVnode) {
     SVnodeGid *pVnode = pVgroup->vnodeGid + i;
     if (pVnode == pRmVnode) continue;
 
-    mTrace("vgId:%d, change vgroup status, dnode:%d status:%d", pVgroup->vgId, pVnode->pDnode->dnodeId,
-           pVnode->pDnode->status);
+    mTrace("vgId:%d, check vgroup status, dnode:%d status:%d, vnode role:%s", pVgroup->vgId, pVnode->pDnode->dnodeId,
+           pVnode->pDnode->status, syncRole[pVnode->role]);
     if (pVnode->pDnode->status == TAOS_DN_STATUS_DROPPING) continue;
     if (pVnode->pDnode->status == TAOS_DN_STATUS_OFFLINE) continue;
 
@@ -214,8 +233,8 @@ static bool balanceCheckVgroupReady(SVgObj *pVgroup, SVnodeGid *pRmVnode) {
  * desc: remove one vnode from vgroup
  * all vnodes in vgroup should in ready state, except the balancing one
  **/
-static void balanceRemoveVnode(SVgObj *pVgroup) {
-  if (pVgroup->numOfVnodes <= 1) return;
+static int32_t balanceRemoveVnode(SVgObj *pVgroup) {
+  if (pVgroup->numOfVnodes <= 1) return -1;
 
   SVnodeGid *pRmVnode = NULL;
   SVnodeGid *pSelVnode = NULL;
@@ -258,9 +277,11 @@ static void balanceRemoveVnode(SVgObj *pVgroup) {
 
   if (!balanceCheckVgroupReady(pVgroup, pSelVnode)) {
     mDebug("vgId:%d, is not ready", pVgroup->vgId);
+    return -1;
   } else {
     mDebug("vgId:%d, is ready, discard dnode:%d", pVgroup->vgId, pSelVnode->dnodeId);
     balanceDiscardVnode(pVgroup, pSelVnode);
+    return TSDB_CODE_SUCCESS;
   }
 }
 
@@ -386,6 +407,7 @@ void balanceReset() {
     pDnode->lastAccess = 0;
     if (pDnode->status != TAOS_DN_STATUS_DROPPING) {
       pDnode->status = TAOS_DN_STATUS_OFFLINE;
+      pDnode->offlineReason = TAOS_DN_OFF_STATUS_NOT_RECEIVED;
     }
 
     mnodeDecDnodeRef(pDnode);
@@ -407,18 +429,22 @@ static int32_t balanceMonitorVgroups() {
 
     int32_t dbReplica = pVgroup->pDb->cfg.replications;
     int32_t vgReplica = pVgroup->numOfVnodes;
+    int32_t code = -1;
     
     if (vgReplica > dbReplica) {
       mInfo("vgId:%d, replica:%d numOfVnodes:%d, try remove one vnode", pVgroup->vgId, dbReplica, vgReplica);
       hasUpdatingVgroup = true;
-      balanceRemoveVnode(pVgroup);
+      code = balanceRemoveVnode(pVgroup);
     } else if (vgReplica < dbReplica) {
       mInfo("vgId:%d, replica:%d numOfVnodes:%d, try add one vnode", pVgroup->vgId, dbReplica, vgReplica);
       hasUpdatingVgroup = true;
-      balanceAddVnode(pVgroup, NULL, NULL);
+      code = balanceAddVnode(pVgroup, NULL, NULL);
     }
 
     mnodeDecVgroupRef(pVgroup);
+    if (code == TSDB_CODE_SUCCESS) {
+      break;
+    }
   }
 
   sdbFreeIter(pIter);
@@ -544,7 +570,9 @@ static void balanceCheckDnodeAccess() {
     if (tsAccessSquence - pDnode->lastAccess > 3) {
       if (pDnode->status != TAOS_DN_STATUS_DROPPING && pDnode->status != TAOS_DN_STATUS_OFFLINE) {
         pDnode->status = TAOS_DN_STATUS_OFFLINE;
-        mInfo("dnode:%d, set to offline state", pDnode->dnodeId);
+        pDnode->offlineReason = TAOS_DN_OFF_STATUS_MSG_TIMEOUT;
+        mInfo("dnode:%d, set to offline state, access seq:%d, last seq:%d", pDnode->dnodeId, tsAccessSquence,
+              pDnode->lastAccess);
         balanceSetVgroupOffline(pDnode);
       }
     }
@@ -928,6 +956,7 @@ static int32_t balanceRetrieveScores(SShowObj *pShow, char *data, int32_t rows, 
     mnodeDecDnodeRef(pDnode);
   }
 
+  mnodeVacuumResult(data, pShow->numOfColumns, numOfRows, rows, pShow);
   pShow->numOfReads += numOfRows;
   return numOfRows;
 }
@@ -948,11 +977,16 @@ static void balanceMonitorDnodeModule() {
       continue;
     }
 
-    mLInfo("dnode:%d, numOfMnodes:%d expect:%d, add mnode in this dnode", pDnode->dnodeId, numOfMnodes, tsNumOfMnodes);
-    mnodeAddMnode(pDnode->dnodeId);
-    
+    mLInfo("dnode:%d, numOfMnodes:%d expect:%d, create mnode in this dnode", pDnode->dnodeId, numOfMnodes, tsNumOfMnodes);
+    mnodeCreateMnode(pDnode->dnodeId, pDnode->dnodeEp, true);
+
+#if 0
+    // Only create one mnode each time
+    return;
+#else
     numOfMnodes = mnodeGetMnodesNum();
     if (numOfMnodes >= tsNumOfMnodes) return;
+#endif
   }
 }
 

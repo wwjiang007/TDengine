@@ -313,7 +313,9 @@ bool simExecuteSystemCmd(SScript *script, char *option) {
     simError("script:%s, failed to execute %s , code %d, errno:%d %s, repeatTimes:%d",
         script->fileName, buf, code, errno, strerror(errno), repeatTimes);
     taosMsleep(1000);
+#ifdef LINUX    
     signal(SIGCHLD, SIG_DFL);
+#endif
     if (repeatTimes++ >= 10) {
       exit(0);
     }
@@ -418,14 +420,14 @@ void simVisuallizeOption(SScript *script, char *src, char *dst) {
     var = strchr(src, '$');
     if (var == NULL) break;
     if (var && ((var - src - 1) > 0) && *(var - 1) == '\\') {
-      srcLen = var - src - 1;
+      srcLen = (int)(var - src - 1);
       memcpy(dst + dstLen, src, srcLen);
       dstLen += srcLen;
       src = var;
       break;
     }
 
-    srcLen = var - src;
+    srcLen = (int)(var - src);
     memcpy(dst + dstLen, src, srcLen);
     dstLen += srcLen;
 
@@ -433,7 +435,7 @@ void simVisuallizeOption(SScript *script, char *src, char *dst) {
     value = simGetVariable(script, token, tokenLen);
 
     strcpy(dst + dstLen, value);
-    dstLen += strlen(value);
+    dstLen += (int)strlen(value);
   }
 
   strcpy(dst + dstLen, src);
@@ -455,9 +457,9 @@ void simCloseNativeConnect(SScript *script) {
 
 void simCloseTaosdConnect(SScript *script) {
   if (simAsyncQuery) {
-    return simCloseRestFulConnect(script);
+    simCloseRestFulConnect(script);
   } else {
-    return simCloseNativeConnect(script);
+    simCloseNativeConnect(script);
   }
 }
 //  {"status":"succ","code":0,"desc":"/KfeAzX/f9na8qdtNZmtONryp201ma04bEl8LcvLUd7a8qdtNZmtONryp201ma04"}
@@ -575,7 +577,7 @@ int simExecuteRestFulCommand(SScript *script, char *command) {
 
   while (!feof(fp)) {
     int availSize = mallocSize - alreadyReadSize;
-    int len = fread(content + alreadyReadSize, 1, availSize, fp);
+    int len = (int)fread(content + alreadyReadSize, 1, availSize, fp);
     if (len >= availSize) {
       alreadyReadSize += len;
       mallocSize *= 2;
@@ -665,7 +667,7 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
 
   TAOS_RES* pSql = NULL;
   
-  for (int attempt = 0; attempt < 3; ++attempt) {
+  for (int attempt = 0; attempt < 10; ++attempt) {
     simLogSql(rest, false);
     pSql = taos_query(script->taos, rest);
     ret = taos_errno(pSql);
@@ -737,40 +739,22 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
                       ((((int)(*((char *)row[i]))) == 1) ? "1" : "0"));
               break;
             case TSDB_DATA_TYPE_TINYINT:
-              sprintf(value, "%d", (int)(*((char *)row[i])));
+              sprintf(value, "%d", *((int8_t *)row[i]));
               break;
             case TSDB_DATA_TYPE_SMALLINT:
-              sprintf(value, "%d", (int)(*((short *)row[i])));
+              sprintf(value, "%d", *((int16_t *)row[i]));
               break;
             case TSDB_DATA_TYPE_INT:
-              sprintf(value, "%d", *((int *)row[i]));
+              sprintf(value, "%d", *((int32_t *)row[i]));
               break;
             case TSDB_DATA_TYPE_BIGINT:
-#ifdef _TD_ARM_32_
-              sprintf(value, "%lld", *((int64_t *)row[i]));
-#else
-              sprintf(value, "%ld", *((int64_t *)row[i]));
-#endif
+              sprintf(value, "%" PRId64, *((int64_t *)row[i]));
               break;
-            case TSDB_DATA_TYPE_FLOAT:{
-#ifdef _TD_ARM_32_
-              float fv = 0;
-              *(int32_t*)(&fv) = *(int32_t*)row[i];
-              sprintf(value, "%.5f", fv);
-#else
-              sprintf(value, "%.5f", *((float *)row[i]));
-#endif
-            }
+            case TSDB_DATA_TYPE_FLOAT:
+              sprintf(value, "%.5f", GET_FLOAT_VAL(row[i]));
               break;
-            case TSDB_DATA_TYPE_DOUBLE: {
-#ifdef _TD_ARM_32_
-              double dv = 0;
-              *(int64_t*)(&dv) = *(int64_t*)row[i];
-              sprintf(value, "%.9lf", dv);
-#else
-              sprintf(value, "%.9lf", *((double *)row[i]));
-#endif
-            }
+            case TSDB_DATA_TYPE_DOUBLE:
+              sprintf(value, "%.9lf", GET_DOUBLE_VAL(row[i]));
               break;
             case TSDB_DATA_TYPE_BINARY:
             case TSDB_DATA_TYPE_NCHAR:
@@ -781,10 +765,23 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
               break;
             case TSDB_DATA_TYPE_TIMESTAMP:
               tt = *(int64_t *)row[i] / 1000;
+              /* comment out as it make testcases like select_with_tags.sim fail.
+                but in windows, this may cause the call to localtime crash if tt < 0,
+                need to find a better solution.
+              if (tt < 0) {
+                tt = 0;
+              }
+              */
+
+#ifdef WINDOWS
+              if (tt < 0) tt = 0;
+#endif
+
               tp = localtime(&tt);
               strftime(timeStr, 64, "%y-%m-%d %H:%M:%S", tp);
               sprintf(value, "%s.%03d", timeStr,
-                      (int)(*((int64_t *)row[i]) % 1000));
+                (int)(*((int64_t *)row[i]) % 1000));
+              
               break;
             default:
               break;
@@ -902,6 +899,47 @@ bool simExecuteSqlCmd(SScript *script, char *rest) {
 bool simExecuteSqlSlowCmd(SScript *script, char *rest) {
   bool isSlow = true;
   return simExecuteSqlImpCmd(script, rest, isSlow);
+}
+
+bool simExecuteRestfulCmd(SScript *script, char *rest) {
+  FILE *fp = NULL;
+  char filename[256];
+  sprintf(filename, "%s/tmp.sql", tsScriptDir);  
+  fp = fopen(filename, "w");
+  if (fp == NULL) {
+    fprintf(stderr, "ERROR: failed to open file: %s\n", filename);
+    return false;
+  }
+
+  char db[64] = {0};
+  char tb[64] = {0};
+  char gzip[32] = {0};
+  int32_t ts;
+  int32_t times;
+  sscanf(rest, "%s %s %d %d %s", db, tb, &ts, &times, gzip);
+  
+  fprintf(fp, "insert into %s.%s values ", db, tb);
+  for (int i = 0; i < times; ++i) {
+    fprintf(fp, "(%d000, %d)", ts + i, ts);
+  }
+  fprintf(fp, "  \n");
+  fflush(fp);
+  fclose(fp);
+
+  char cmd[1024] = {0};
+  if (strcmp(gzip, "gzip") == 0) {
+    sprintf(cmd,
+            "curl -H 'Authorization: Taosd /KfeAzX/f9na8qdtNZmtONryp201ma04bEl8LcvLUd7a8qdtNZmtONryp201ma04' --header "
+            "--compressed --data-ascii @%s 127.0.0.1:7111/rest/sql",
+            filename);
+  } else {
+    sprintf(cmd,
+            "curl -H 'Authorization: Taosd /KfeAzX/f9na8qdtNZmtONryp201ma04bEl8LcvLUd7a8qdtNZmtONryp201ma04' --header "
+            "'Transfer-Encoding: chunked' --data-ascii @%s 127.0.0.1:7111/rest/sql",
+            filename);
+  }
+
+  return simExecuteSystemCmd(script, cmd);
 }
 
 bool simExecuteSqlErrorCmd(SScript *script, char *rest) {

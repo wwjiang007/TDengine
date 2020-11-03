@@ -43,11 +43,13 @@ void    dnodeGetMnodeEpSetForPeer(void *epSet);
 void    dnodeGetMnodeEpSetForShell(void *epSet);
 void *  dnodeGetMnodeInfos();
 int32_t dnodeGetDnodeId();
+bool    dnodeStartMnode(void *pModes);
 
 void  dnodeAddClientRspHandle(uint8_t msgType, void (*fp)(SRpcMsg *rpcMsg));
 void  dnodeSendMsgToDnode(SRpcEpSet *epSet, SRpcMsg *rpcMsg);
-void  dnodeSendMsgToDnodeRecv(SRpcMsg *rpcMsg, SRpcMsg *rpcRsp);
-void *dnodeSendCfgTableToRecv(int32_t vgId, int32_t sid);
+void  dnodeSendMsgToMnodeRecv(SRpcMsg *rpcMsg, SRpcMsg *rpcRsp);
+void  dnodeSendMsgToDnodeRecv(SRpcMsg *rpcMsg, SRpcMsg *rpcRsp, SRpcEpSet *epSet);
+void *dnodeSendCfgTableToRecv(int32_t vgId, int32_t tid);
 
 void *dnodeAllocateVnodeWqueue(void *pVnode);
 void  dnodeFreeVnodeWqueue(void *queue);
@@ -64,6 +66,8 @@ void    dnodeFreeMnodeWqueue();
 void    dnodeSendRpcMnodeWriteRsp(void *pMsg, int32_t code);
 void    dnodeReprocessMnodeWriteMsg(void *pMsg);
 void    dnodeDelayReprocessMnodeWriteMsg(void *pMsg);
+
+void    dnodeSendStatusMsgToMnode();
 
 #ifdef __cplusplus
 }

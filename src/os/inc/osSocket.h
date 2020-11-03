@@ -25,6 +25,7 @@ extern "C" {
   #define taosSendto(sockfd, buf, len, flags, dest_addr, addrlen) sendto(sockfd, buf, len, flags, dest_addr, addrlen)
   #define taosReadSocket(fd, buf, len) read(fd, buf, len)
   #define taosWriteSocket(fd, buf, len) write(fd, buf, len)
+  #define taosCloseSocketNoCheck(x) close(x)
   #define taosCloseSocket(x) \
     {                        \
       if (FD_VALID(x)) {     \
@@ -32,7 +33,12 @@ extern "C" {
         x = FD_INITIALIZER;  \
       }                      \
     }
-#endif    
+  typedef int SOCKET;
+#endif
+
+#ifndef TAOS_OS_DEF_EPOLL
+  #define TAOS_EPOLL_WAIT_TIME -1
+#endif  
 
 #define taosClose(x) taosCloseSocket(x)
 
@@ -54,11 +60,15 @@ extern "C" {
 #endif
 
 // TAOS_OS_FUNC_SOCKET
-int taosSetNonblocking(int sock, int on);
+int taosSetNonblocking(SOCKET sock, int on);
 void taosBlockSIGPIPE();
 
 // TAOS_OS_FUNC_SOCKET_SETSOCKETOPT
-int taosSetSockOpt(int socketfd, int level, int optname, void *optval, int optlen);
+int taosSetSockOpt(SOCKET socketfd, int level, int optname, void *optval, int optlen);
+
+// TAOS_OS_FUNC_SOCKET_INET
+uint32_t taosInetAddr(char *ipAddr);
+const char *taosInetNtoa(struct in_addr ipInt);
 
 #ifdef __cplusplus
 }

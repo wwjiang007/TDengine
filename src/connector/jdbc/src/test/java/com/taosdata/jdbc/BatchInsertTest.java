@@ -7,13 +7,11 @@ import org.junit.Test;
 import java.sql.*;
 import java.util.Properties;
 import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
-import java.util.Properties;
-import java.util.concurrent.Executors;
-import java.util.concurrent.*;
-
-import static org.junit.Assert.assertTrue;
 
 public class BatchInsertTest extends BaseTest {
 
@@ -40,8 +38,7 @@ public class BatchInsertTest extends BaseTest {
         properties.setProperty(TSDBDriver.PROPERTY_KEY_CHARSET, "UTF-8");
         properties.setProperty(TSDBDriver.PROPERTY_KEY_LOCALE, "en_US.UTF-8");
         properties.setProperty(TSDBDriver.PROPERTY_KEY_TIME_ZONE, "UTC-8");
-        connection = DriverManager.getConnection("jdbc:TAOS://" + host + ":0/" + "?user=root&password=taosdata"
-                , properties);
+        connection = DriverManager.getConnection("jdbc:TAOS://" + host + ":0/", properties);
                 
         statement = connection.createStatement();
         statement.executeUpdate("drop database if exists " + dbName);

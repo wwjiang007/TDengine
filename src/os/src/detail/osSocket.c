@@ -19,7 +19,7 @@
 
 #ifndef TAOS_OS_FUNC_SOCKET
 
-int taosSetNonblocking(int sock, int on) {
+int taosSetNonblocking(SOCKET sock, int on) {
   int flags = 0;
   if ((flags = fcntl(sock, F_GETFL, 0)) < 0) {
     uError("fcntl(F_GETFL) error: %d (%s)\n", errno, strerror(errno));
@@ -53,8 +53,20 @@ void taosBlockSIGPIPE() {
 
 #ifndef TAOS_OS_FUNC_SOCKET_SETSOCKETOPT
 
-int taosSetSockOpt(int socketfd, int level, int optname, void *optval, int optlen) {
+int taosSetSockOpt(SOCKET socketfd, int level, int optname, void *optval, int optlen) {
   return setsockopt(socketfd, level, optname, optval, (socklen_t)optlen);
+}
+
+#endif
+
+#ifndef TAOS_OS_FUNC_SOCKET_INET
+
+uint32_t taosInetAddr(char *ipAddr) {
+  return inet_addr(ipAddr);
+}
+
+const char *taosInetNtoa(struct in_addr ipInt) {
+  return inet_ntoa(ipInt);
 }
 
 #endif

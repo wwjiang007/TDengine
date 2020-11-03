@@ -28,9 +28,9 @@ void tscFetchDatablockFromSubquery(SSqlObj* pSql);
 void tscSetupOutputColumnIndex(SSqlObj* pSql);
 void tscJoinQueryCallback(void* param, TAOS_RES* tres, int code);
 
-SJoinSupporter* tscCreateJoinSupporter(SSqlObj* pSql, SSubqueryState* pState, int32_t index);
+SJoinSupporter* tscCreateJoinSupporter(SSqlObj* pSql, int32_t index);
 
-int32_t tscHandleMasterJoinQuery(SSqlObj* pSql);
+void tscHandleMasterJoinQuery(SSqlObj* pSql);
 
 int32_t tscHandleMasterSTableQuery(SSqlObj *pSql);
 
@@ -39,7 +39,7 @@ int32_t tscHandleMultivnodeInsert(SSqlObj *pSql);
 int32_t tscHandleInsertRetry(SSqlObj* pSql);
 
 void tscBuildResFromSubqueries(SSqlObj *pSql);
-void **doSetResultRowData(SSqlObj *pSql, bool finalResult);
+TAOS_ROW doSetResultRowData(SSqlObj *pSql, bool finalResult);
 
 #ifdef __cplusplus
 }

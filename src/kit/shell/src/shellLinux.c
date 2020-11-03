@@ -33,10 +33,11 @@ const char *argp_program_bug_address = "<support@taosdata.com>";
 static char doc[] = "";
 static char args_doc[] = "";
 static struct argp_option options[] = {
-  {"host",       'h', "HOST",       0,                   "TDEngine server IP address to connect. The default host is localhost."},
+  {"host",       'h', "HOST",       0,                   "TDengine server IP address to connect. The default host is localhost."},
   {"password",   'p', "PASSWORD",   OPTION_ARG_OPTIONAL, "The password to use when connecting to the server."},
   {"port",       'P', "PORT",       0,                   "The TCP/IP port number to use for the connection."},
-  {"user",       'u', "USER",       0,                   "The TDEngine user name to use when connecting to the server."},
+  {"user",       'u', "USER",       0,                   "The user name to use when connecting to the server."},
+  {"user",       'A', "Auth",       0,                   "The user auth to use when connecting to the server."},
   {"config-dir", 'c', "CONFIG_DIR", 0,                   "Configuration directory."},
   {"commands",   's', "COMMANDS",   0,                   "Commands to run without enter the shell."},
   {"raw-time",   'r', 0,            0,                   "Output time as uint64_t."},
@@ -45,6 +46,9 @@ static struct argp_option options[] = {
   {"thread",     'T', "THREADNUM",  0,                   "Number of threads when using multi-thread to import data."},
   {"database",   'd', "DATABASE",   0,                   "Database to use when connecting to the server."},
   {"timezone",   't', "TIMEZONE",   0,                   "Time zone of the shell, default is local."},
+  {"netrole",    'n', "NETROLE",    0,                   "Net role when network connectivity test, default is NULL, valid option: client | server."},
+  {"endport",    'e', "ENDPORT",    0,                   "Net test end port, default is 6042."},
+  {"pktlen",     'l', "PKTLEN",     0,                   "Packet length used for net test, default is 1000 bytes."},
   {0}};
 
 static error_t parse_opt(int key, char *arg, struct argp_state *state) {
@@ -64,6 +68,7 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
     case 'P':
       if (arg) {
         tsDnodeShellPort = atoi(arg);
+        arguments->port  = atoi(arg);
       } else {
         fprintf(stderr, "Invalid port\n");
         return -1;
@@ -76,11 +81,14 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
     case 'u':
       arguments->user = arg;
       break;
+    case 'A':
+      arguments->auth = arg;
+      break;
     case 'c':
       if (wordexp(arg, &full_path, 0) != 0) {
         fprintf(stderr, "Invalid path %s\n", arg);
         return -1;
-      }       
+      }
       if (strlen(full_path.we_wordv[0]) >= TSDB_FILENAME_LEN) {
         fprintf(stderr, "config file path: %s overflow max len %d\n", full_path.we_wordv[0], TSDB_FILENAME_LEN - 1);
         wordfree(&full_path);
@@ -122,6 +130,29 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
     case 'd':
       arguments->database = arg;
       break;
+
+    case 'n':
+      arguments->netTestRole = arg;
+      break;
+
+    case 'e':
+      if (arg) {
+        arguments->endPort = atoi(arg);
+      } else {
+        fprintf(stderr, "Invalid end port\n");
+        return -1;
+      }
+      break;
+
+    case 'l':
+      if (arg) {
+        arguments->pktLen = atoi(arg);
+      } else {
+        fprintf(stderr, "Invalid packet length\n");
+        return -1;
+      }
+      break;
+      
     case OPT_ABORT:
       arguments->abort = 1;
       break;
@@ -378,7 +409,7 @@ void set_terminal_mode() {
   }
 }
 
-void get_history_path(char *history) { sprintf(history, "%s/%s", getpwuid(getuid())->pw_dir, HISTORY_FILE); }
+void get_history_path(char *history) { snprintf(history, TSDB_FILENAME_LEN, "%s/%s", getenv("HOME"), HISTORY_FILE); }
 
 void clearScreen(int ecmd_pos, int cursor_pos) {
   struct winsize w;

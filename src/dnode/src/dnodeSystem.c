@@ -22,7 +22,7 @@
 #include "dnodeMain.h"
 
 static void signal_handler(int32_t signum, siginfo_t *sigInfo, void *context);
-static sem_t exitSem;
+static tsem_t exitSem;
 
 int32_t main(int32_t argc, char *argv[]) {
   // Set global configuration file
@@ -52,6 +52,8 @@ int32_t main(int32_t argc, char *argv[]) {
     } else if (strcmp(argv[i], "-k") == 0) {
       grantParseParameter();
       exit(EXIT_SUCCESS);
+    } else if (strcmp(argv[i], "-A") == 0) {
+      tsPrintAuth = 1;
     }
 #ifdef TAOS_MEM_CHECK
     else if (strcmp(argv[i], "--alloc-random-fail") == 0) {
@@ -88,7 +90,7 @@ int32_t main(int32_t argc, char *argv[]) {
 #endif
   }
 
-  if (sem_init(&exitSem, 0, 0) != 0) {
+  if (tsem_init(&exitSem, 0, 0) != 0) {
     printf("failed to create exit semphore\n");
     exit(EXIT_FAILURE);
   }
@@ -117,11 +119,8 @@ int32_t main(int32_t argc, char *argv[]) {
 
   syslog(LOG_INFO, "Started TDengine service successfully.");
 
-  for (int res = sem_wait(&exitSem); res != 0; res = sem_wait(&exitSem)) {
-    if (res != EINTR) {
-      syslog(LOG_ERR, "failed to wait exit semphore: %d", res);
-      break;
-    }
+  if (tsem_wait(&exitSem) != 0) {
+    syslog(LOG_ERR, "failed to wait exit semphore: %s", strerror(errno));
   }
 
   dnodeCleanUpSystem();
@@ -157,5 +156,5 @@ static void signal_handler(int32_t signum, siginfo_t *sigInfo, void *context) {
   sigaction(SIGUSR2, &act, NULL);
 
   // inform main thread to exit
-  sem_post(&exitSem);
+  tsem_post(&exitSem);
 }

@@ -20,6 +20,7 @@
 #include "taos.h"
 #include "taosdef.h"
 #include "stdbool.h"
+#include "tsclient.h"
 
 #define MAX_USERNAME_SIZE      64
 #define MAX_DBNAME_SIZE        64
@@ -39,6 +40,7 @@ typedef struct SShellArguments {
   char* host;
   char* password;
   char* user;
+  char* auth;
   char* database;
   char* timezone;
   bool  is_raw_time;
@@ -49,13 +51,16 @@ typedef struct SShellArguments {
   char* commands;
   int   abort;
   int   port;
+  int   endPort;
+  int   pktLen;
+  char* netTestRole;
 } SShellArguments;
 
 /**************** Function declarations ****************/
 extern void shellParseArgument(int argc, char* argv[], SShellArguments* arguments);
 extern TAOS* shellInit(SShellArguments* args);
 extern void* shellLoopQuery(void* arg);
-extern void taos_error(TAOS* con);
+extern void taos_error(TAOS_RES* tres);
 extern int regex_match(const char* s, const char* reg, int cflags);
 void shellReadCommand(TAOS* con, char command[]);
 int32_t shellRunCommand(TAOS* con, char* command);
@@ -67,7 +72,7 @@ void source_dir(TAOS* con, SShellArguments* args);
 void get_history_path(char* history);
 void cleanup_handler(void* arg);
 void exitShell();
-int shellDumpResult(TAOS* con, char* fname, int* error_no, bool printMode);
+int shellDumpResult(TAOS_RES* con, char* fname, int* error_no, bool printMode);
 void shellGetGrantInfo(void *con);
 int isCommentLine(char *line);
 

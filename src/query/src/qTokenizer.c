@@ -25,7 +25,7 @@
 // All the keywords of the SQL language are stored in a hash table
 typedef struct SKeyword {
   const char* name;  // The keyword name
-  uint16_t     type;  // type
+  uint16_t    type;  // type
   uint8_t     len;   // length
 } SKeyword;
 
@@ -85,7 +85,7 @@ static SKeyword keywordTable[] = {
     {"QUERIES",      TK_QUERIES},
     {"CONNECTIONS",  TK_CONNECTIONS},
     {"STREAMS",      TK_STREAMS},
-    {"CONFIGS",      TK_CONFIGS},
+    {"VARIABLES",    TK_VARIABLES},
     {"SCORES",       TK_SCORES},
     {"GRANTS",       TK_GRANTS},
     {"DOT",          TK_DOT},
@@ -121,7 +121,6 @@ static SKeyword keywordTable[] = {
     {"MINROWS",      TK_MINROWS},
     {"MAXROWS",      TK_MAXROWS},
     {"BLOCKS",       TK_BLOCKS},
-    {"MAXTABLES",    TK_MAXTABLES},
     {"CACHE",        TK_CACHE},
     {"CTIME",        TK_CTIME},
     {"WAL",          TK_WAL},
@@ -254,12 +253,12 @@ static const char isIdChar[] = {
 
 static void* KeywordHashTable = NULL;
 
-static void doInitKeywordsTable() {
+static void doInitKeywordsTable(void) {
   int numOfEntries = tListLen(keywordTable);
   
-  KeywordHashTable = taosHashInit(numOfEntries, MurmurHash3_32, false);
+  KeywordHashTable = taosHashInit(numOfEntries, MurmurHash3_32, true, false);
   for (int32_t i = 0; i < numOfEntries; i++) {
-    keywordTable[i].len = strlen(keywordTable[i].name);
+    keywordTable[i].len = (uint8_t)strlen(keywordTable[i].name);
     void* ptr = &keywordTable[i];
     taosHashPut(KeywordHashTable, keywordTable[i].name, keywordTable[i].len, (void*)&ptr, POINTER_BYTES);
   }
@@ -580,8 +579,8 @@ uint32_t tSQLGetToken(char* z, uint32_t* tokenType) {
   return 0;
 }
 
-SSQLToken tStrGetToken(char* str, int32_t* i, bool isPrevOptr, uint32_t numOfIgnoreToken, uint32_t* ignoreTokenTypes) {
-  SSQLToken t0 = {0};
+SStrToken tStrGetToken(char* str, int32_t* i, bool isPrevOptr, uint32_t numOfIgnoreToken, uint32_t* ignoreTokenTypes) {
+  SStrToken t0 = {0};
 
   // here we reach the end of sql string, null-terminated string
   if (str[*i] == 0) {
@@ -659,3 +658,7 @@ SSQLToken tStrGetToken(char* str, int32_t* i, bool isPrevOptr, uint32_t numOfIgn
 }
 
 bool isKeyWord(const char* z, int32_t len) { return (tSQLKeywordCode((char*)z, len) != TK_ID); }
+
+void taosCleanupKeywordsTable() {
+  taosHashCleanup(KeywordHashTable);
+}

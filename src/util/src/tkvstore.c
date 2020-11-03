@@ -14,6 +14,9 @@
  */
 
 #define _DEFAULT_SOURCE
+
+#define TAOS_RANDOM_FILE_FAIL_TEST
+
 #include "os.h"
 #include "hash.h"
 #include "taoserror.h"
@@ -21,7 +24,6 @@
 #include "tcoding.h"
 #include "tkvstore.h"
 #include "tulog.h"
-#define TAOS_RANDOM_FILE_FAIL_TEST
 
 #define TD_KVSTORE_HEADER_SIZE 512
 #define TD_KVSTORE_MAJOR_VERSION 1
@@ -120,7 +122,7 @@ SKVStore *tdOpenKVStore(char *fname, iterFunc iFunc, afterFunc aFunc, void *appH
                version, KVSTORE_FILE_VERSION);
       }
 
-      if (ftruncate(pStore->fd, info.size) < 0) {
+      if (taosFtruncate(pStore->fd, info.size) < 0) {
         uError("failed to truncate %s to %" PRId64 " size since %s", pStore->fname, info.size, strerror(errno));
         terrno = TAOS_SYSTEM_ERROR(errno);
         goto _err;
@@ -296,7 +298,7 @@ int tdDropKVStoreRecord(SKVStore *pStore, uint64_t uid) {
     return -1;
   }
 
-  pStore->info.magic = taosCalcChecksum(pStore->info.magic, (uint8_t *)buf, POINTER_DISTANCE(pBuf, buf));
+  pStore->info.magic = taosCalcChecksum(pStore->info.magic, (uint8_t *)buf, (uint32_t)POINTER_DISTANCE(pBuf, buf));
   pStore->info.size += POINTER_DISTANCE(pBuf, buf);
   pStore->info.nDels++;
   pStore->info.nRecords--;
@@ -328,6 +330,33 @@ int tdKVStoreEndCommit(SKVStore *pStore) {
 
   (void)remove(pStore->fsnap);
   return 0;
+}
+
+void tsdbGetStoreInfo(char *fname, uint32_t *magic, int64_t *size) {
+  char       buf[TD_KVSTORE_HEADER_SIZE] = "\0";
+  SStoreInfo info = {0};
+
+  int fd = open(fname, O_RDONLY);
+  if (fd < 0) goto _err;
+
+  if (taosTRead(fd, buf, TD_KVSTORE_HEADER_SIZE) < TD_KVSTORE_HEADER_SIZE) goto _err;
+  if (!taosCheckChecksumWhole((uint8_t *)buf, TD_KVSTORE_HEADER_SIZE)) goto _err;
+
+  void *pBuf = (void *)buf;
+  pBuf = tdDecodeStoreInfo(pBuf, &info);
+  off_t offset = lseek(fd, 0, SEEK_END);
+  if (offset < 0) goto _err;
+  close(fd);
+
+  *magic = info.magic;
+  *size = offset;
+
+  return;
+
+_err:
+  if (fd >= 0) close(fd);
+  *magic = TD_KVSTORE_INIT_MAGIC;
+  *size = 0;
 }
 
 static int tdLoadKVStoreHeader(int fd, char *fname, SStoreInfo *pInfo, uint32_t *version) {
@@ -433,7 +462,7 @@ static SKVStore *tdNewKVStore(char *fname, iterFunc iFunc, afterFunc aFunc, void
   pStore->iFunc = iFunc;
   pStore->aFunc = aFunc;
   pStore->appH = appH;
-  pStore->map = taosHashInit(4096, taosGetDefaultHashFunction(TSDB_DATA_TYPE_BIGINT), false);
+  pStore->map = taosHashInit(4096, taosGetDefaultHashFunction(TSDB_DATA_TYPE_BIGINT), true, false);
   if (pStore->map == NULL) {
     terrno = TSDB_CODE_COM_OUT_OF_MEMORY;
     goto _err;
@@ -498,7 +527,7 @@ static void *tdDecodeKVRecord(void *buf, SKVRecord *pRecord) {
 static int tdRestoreKVStore(SKVStore *pStore) {
   char                  tbuf[128] = "\0";
   void *                buf = NULL;
-  int                   maxBufSize = 0;
+  int64_t               maxBufSize = 0;
   SKVRecord             rInfo = {0};
   SHashMutableIterator *pIter = NULL;
 
@@ -509,7 +538,7 @@ static int tdRestoreKVStore(SKVStore *pStore) {
     ssize_t tsize = taosTRead(pStore->fd, tbuf, sizeof(SKVRecord));
     if (tsize == 0) break;
     if (tsize < sizeof(SKVRecord)) {
-      uError("failed to read %zu bytes from file %s at offset %" PRId64 "since %s", sizeof(SKVRecord), pStore->fname,
+      uError("failed to read %" PRIzu " bytes from file %s at offset %" PRId64 "since %s", sizeof(SKVRecord), pStore->fname,
              pStore->info.size, strerror(errno));
       terrno = TAOS_SYSTEM_ERROR(errno);
       goto _err;
@@ -535,7 +564,7 @@ static int tdRestoreKVStore(SKVStore *pStore) {
 
       maxBufSize = MAX(maxBufSize, rInfo.size);
 
-      if (lseek(pStore->fd, rInfo.size, SEEK_CUR) < 0) {
+      if (lseek(pStore->fd, (off_t)rInfo.size, SEEK_CUR) < 0) {
         uError("failed to lseek file %s since %s", pStore->fname, strerror(errno));
         terrno = TAOS_SYSTEM_ERROR(errno);
         goto _err;
@@ -546,9 +575,9 @@ static int tdRestoreKVStore(SKVStore *pStore) {
     }
   }
 
-  buf = malloc(maxBufSize);
+  buf = malloc((size_t)maxBufSize);
   if (buf == NULL) {
-    uError("failed to allocate %d bytes in KV store %s", maxBufSize, pStore->fname);
+    uError("failed to allocate %" PRId64 " bytes in KV store %s", maxBufSize, pStore->fname);
     terrno = TAOS_SYSTEM_ERROR(errno);
     goto _err;
   }
@@ -563,13 +592,13 @@ static int tdRestoreKVStore(SKVStore *pStore) {
   while (taosHashIterNext(pIter)) {
     SKVRecord *pRecord = taosHashIterGet(pIter);
 
-    if (lseek(pStore->fd, pRecord->offset + sizeof(SKVRecord), SEEK_SET) < 0) {
+    if (lseek(pStore->fd, (off_t)(pRecord->offset + sizeof(SKVRecord)), SEEK_SET) < 0) {
       uError("failed to lseek file %s since %s, offset %" PRId64, pStore->fname, strerror(errno), pRecord->offset);
       terrno = TAOS_SYSTEM_ERROR(errno);
       goto _err;
     }
 
-    if (taosTRead(pStore->fd, buf, pRecord->size) < pRecord->size) {
+    if (taosTRead(pStore->fd, buf, (size_t)pRecord->size) < pRecord->size) {
       uError("failed to read %" PRId64 " bytes from file %s since %s, offset %" PRId64, pRecord->size, pStore->fname,
              strerror(errno), pRecord->offset);
       terrno = TAOS_SYSTEM_ERROR(errno);
@@ -577,7 +606,7 @@ static int tdRestoreKVStore(SKVStore *pStore) {
     }
 
     if (pStore->iFunc) {
-      if ((*pStore->iFunc)(pStore->appH, buf, pRecord->size) < 0) {
+      if ((*pStore->iFunc)(pStore->appH, buf, (int)pRecord->size) < 0) {
         uError("failed to restore record uid %" PRIu64 " in kv store %s at offset %" PRId64 " size %" PRId64
                " since %s",
                pRecord->uid, pStore->fname, pRecord->offset, pRecord->size, tstrerror(terrno));

@@ -4,6 +4,8 @@ system sh/deploy.sh -n dnode1 -i 1
 system sh/cfg.sh -n dnode1 -c walLevel -v 0
 system sh/cfg.sh -n dnode1 -c debugFlag -v 135
 system sh/cfg.sh -n dnode1 -c rpcDebugFlag -v 135
+system sh/cfg.sh -n dnode1 -c maxtablespervnode -v 4
+
 system sh/exec.sh -n dnode1 -s start
 sleep 1000
 sql connect
@@ -24,7 +26,7 @@ $tstart = 100000
 
 sql drop database if exits $db -x step1
 step1:
-sql create database if not exists $db maxTables 4 keep 36500
+sql create database if not exists $db keep 36500
 sql use $db
 sql create table $mt (ts timestamp, c1 int, c2 float, c3 bigint, c4 smallint, c5 tinyint, c6 double, c7 bool, c8 binary(10), c9 nchar(9)) TAGS(t1 int, t2 binary(12))
 
@@ -203,10 +205,12 @@ if $rows != 9 then
 endi
 
 if $data00 != @70-01-01 08:01:40.100@ then
+  print $data00
   return -1
 endi
 
 if $data10 != @70-01-01 08:01:40.200@ then
+  print $data10
   return -1
 endi
 
@@ -254,6 +258,21 @@ if $data00 != $val then
 endi
 
 if $data01 != $val then
+  return -1
+endi
+
+sql select count(join_tb1.*) + count(join_tb0.*) from join_tb1 , join_tb0 where join_tb1.ts = join_tb0.ts and join_tb1.ts >= 100000 and join_tb0.c7 = false;;
+if $rows != 1 then
+  return -1
+endi
+
+if $data00 != 20.000000000 then
+  print expect 20.000000000 actual $data00
+  return -1
+endi
+
+sql select count(join_tb1.*)/10 from join_tb1 , join_tb0 where join_tb1.ts = join_tb0.ts and join_tb1.ts >= 100000 and join_tb0.c7 = false;;
+if $data00 != 1.000000000 then
   return -1
 endi
 
@@ -315,7 +334,10 @@ sql_error select join_tb1.* from $tb1 , $tb2 where join_tb1.ts != join_tb0.ts an
 sql_error select join_tb1.* from $tb1 , $tb1 where join_tb1.ts = join_tb1.ts and join_tb1.ts >= 100000;
 sql_error select join_tb1.* from $tb1 , $tb1 where join_tb1.ts = join_tb1.ts order by ts;
 sql_error select join_tb1.* from $tb1 , $tb1 where join_tb1.ts = join_tb1.ts order by join_tb1.c7;
-
+sql_error select * from join_tb0, join_tb1
+sql_error select last_row(*) from join_tb0, join_tb1
+sql_error select last_row(*) from $tb1, $tb2 where join_tb1.ts < now
+sql_error select last_row(*) from $tb1, $tb2 where join_tb1.ts = join_tb2.ts
 
 print ==================================super table join ==============================
 # select duplicate columns
@@ -378,6 +400,15 @@ sql select sum(join_mt0.c1) from join_mt0, join_mt1 where join_mt0.ts = join_mt1
 
 $val = 198
 if $data00 != $val then
+  return -1
+endi
+
+sql select sum(join_mt0.c1)+sum(join_mt0.c1) from join_mt0, join_mt1 where join_mt0.ts = join_mt1.ts and join_mt0.t1=join_mt1.t1 and join_mt0.c2=99 and join_mt1.ts=100999;
+if $rows != 1 then
+  return -1
+endi
+
+if $data00 != 396.000000000 then
   return -1
 endi
 
@@ -455,15 +486,31 @@ sql insert into um2 using m2 tags(9) values(1000001, 10)(2000000, 20);
 
 sql_error select count(*) from m1,m2 where m1.a=m2.a and m1.ts=m2.ts;
 
-#empty table join test, add for no result join test
+print ====> empty table/empty super-table join test, add for no result join test
 sql create database ux1;
 sql use ux1;
 sql create table m1(ts timestamp, k int) tags(a binary(12), b int);
 sql create table tm0 using m1 tags('abc', 1);
 sql create table m2(ts timestamp, k int) tags(a int, b binary(12));
+
+sql select count(*) from m1, m2 where m1.ts=m2.ts and m1.b=m2.a;
+if $rows != 0 then
+  return -1
+endi
+
 sql create table tm2 using m2 tags(2, 'abc');
 sql select count(*) from tm0, tm2 where tm0.ts=tm2.ts;
-sql select count(*) from m1, m2 where m1.ts=m2.ts and m1.b=m2.a
+if $rows != 0 then
+  return -1
+endi
+
+sql select count(*) from m1, m2 where m1.ts=m2.ts and m1.b=m2.a;
+if $rows != 0 then
+  return -1
+endi
+
+sql drop table tm2;
+sql select count(*) from m1, m2 where m1.ts=m2.ts and m1.b=m2.a;
 sql drop database ux1;
 
 system sh/exec.sh -n dnode1 -s stop -x SIGINT

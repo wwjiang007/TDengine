@@ -15,14 +15,14 @@
 
 #include "os.h"
 #include "shell.h"
+#include "tnettest.h"
 
 pthread_t pid;
 
-// TODO: IMPLEMENT INTERRUPT HANDLER.
-void interruptHandler(int signum) {
+void shellQueryInterruptHandler(int signum) {
 #ifdef LINUX
-  taos_stop_query(result);
-  result = NULL;
+  void* pResHandle = atomic_val_compare_exchange_64(&result, result, 0);
+  taos_stop_query(pResHandle);
 #else
   printf("\nReceive ctrl+c or other signal, quit shell.\n");
   exit(0);
@@ -61,7 +61,10 @@ SShellArguments args = {
   .file = "\0",
   .dir = "\0",
   .threadNum = 5,
-  .commands = NULL
+  .commands = NULL,  
+  .endPort = 6042,
+  .pktLen = 1000,
+  .netTestRole = NULL
 };
 
 /*
@@ -76,6 +79,11 @@ int main(int argc, char* argv[]) {
 
   shellParseArgument(argc, argv, &args);
 
+  if (args.netTestRole && args.netTestRole[0] != 0) {
+    taosNetTest(args.host, (uint16_t)args.port, (uint16_t)args.endPort, args.pktLen, args.netTestRole);
+    exit(0);
+  }
+
   /* Initialize the shell */
   TAOS* con = shellInit(&args);
   if (con == NULL) {
@@ -86,7 +94,7 @@ int main(int argc, char* argv[]) {
   struct sigaction act;
   memset(&act, 0, sizeof(struct sigaction));
   
-  act.sa_handler = interruptHandler;
+  act.sa_handler = shellQueryInterruptHandler;
   sigaction(SIGTERM, &act, NULL);
   sigaction(SIGINT, &act, NULL);
 

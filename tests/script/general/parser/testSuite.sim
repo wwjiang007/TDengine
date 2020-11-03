@@ -97,6 +97,12 @@ run general/parser/topbot.sim
 sleep 2000
 run general/parser/union.sim
 sleep 2000
+run general/parser/constCol.sim
+sleep 2000
+run general/parser/where.sim
+sleep 2000
+run general/parser/timestamp.sim
+sleep 2000
 run general/parser/sliding.sim
 
 #sleep 2000

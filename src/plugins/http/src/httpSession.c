@@ -16,6 +16,7 @@
 #define _DEFAULT_SOURCE
 #include "os.h"
 #include "taos.h"
+#include "taoserror.h"
 #include "tglobal.h"
 #include "tcache.h"
 #include "httpInt.h"
@@ -34,20 +35,20 @@ void httpCreateSession(HttpContext *pContext, void *taos) {
   session.refCount = 1;
   int32_t len = snprintf(session.id, HTTP_SESSION_ID_LEN, "%s.%s", pContext->user, pContext->pass);
 
-  pContext->session = taosCachePut(server->sessionCache, session.id, len, &session, sizeof(HttpSession), tsHttpSessionExpire);
+  pContext->session = taosCachePut(server->sessionCache, session.id, len, &session, sizeof(HttpSession), tsHttpSessionExpire * 1000);
   // void *temp = pContext->session;
   // taosCacheRelease(server->sessionCache, (void **)&temp, false);
 
   if (pContext->session == NULL) {
-    httpError("context:%p, fd:%d, ip:%s, user:%s, error:%s", pContext, pContext->fd, pContext->ipstr, pContext->user,
-              httpMsg[HTTP_SESSION_FULL]);
+    httpError("context:%p, fd:%d, user:%s, error:%s", pContext, pContext->fd, pContext->user,
+              tstrerror(TSDB_CODE_HTTP_SESSION_FULL));
     taos_close(taos);
     pthread_mutex_unlock(&server->serverMutex);
     return;
   }
 
-  httpDebug("context:%p, fd:%d, ip:%s, user:%s, create a new session:%p:%p sessionRef:%d", pContext, pContext->fd,
-            pContext->ipstr, pContext->user, pContext->session, pContext->session->taos, pContext->session->refCount);
+  httpDebug("context:%p, fd:%d, user:%s, create a new session:%p:%p sessionRef:%d", pContext, pContext->fd,
+            pContext->user, pContext->session, pContext->session->taos, pContext->session->refCount);
   pthread_mutex_unlock(&server->serverMutex);
 }
 
@@ -61,11 +62,10 @@ static void httpFetchSessionImp(HttpContext *pContext) {
   pContext->session = taosCacheAcquireByKey(server->sessionCache, sessionId, len);
   if (pContext->session != NULL) {
     atomic_add_fetch_32(&pContext->session->refCount, 1);
-    httpDebug("context:%p, fd:%d, ip:%s, user:%s, find an exist session:%p:%p, sessionRef:%d", pContext, pContext->fd,
-              pContext->ipstr, pContext->user, pContext->session, pContext->session->taos, pContext->session->refCount);
+    httpDebug("context:%p, fd:%d, user:%s, find an exist session:%p:%p, sessionRef:%d", pContext, pContext->fd,
+              pContext->user, pContext->session, pContext->session->taos, pContext->session->refCount);
   } else {
-    httpDebug("context:%p, fd:%d, ip:%s, user:%s, session not found", pContext, pContext->fd, pContext->ipstr,
-              pContext->user);
+    httpDebug("context:%p, fd:%d, user:%s, session not found", pContext, pContext->fd, pContext->user);
   }
 
   pthread_mutex_unlock(&server->serverMutex);
@@ -107,7 +107,7 @@ static void httpDestroySession(void *data) {
 void httpCleanUpSessions() {
   if (tsHttpServer.sessionCache != NULL) {
     SCacheObj *cache = tsHttpServer.sessionCache;
-    httpInfo("session cache is cleanuping, size:%zu", taosHashGetSize(cache->pHashTable));
+    httpInfo("session cache is cleanuping, size:%" PRIzu "", taosHashGetSize(cache->pHashTable));
     taosCacheCleanup(tsHttpServer.sessionCache);
     tsHttpServer.sessionCache = NULL;
   }

@@ -19,7 +19,7 @@
 #include "tutil.h"
 #include "tcompare.h"
 
-__attribute__ ((unused)) static FORCE_INLINE void recordNodeEachLevel(SSkipList *pSkipList, int32_t level) {  // record link count in each level
+UNUSED_FUNC static FORCE_INLINE void recordNodeEachLevel(SSkipList *pSkipList, int32_t level) {  // record link count in each level
 #if SKIP_LIST_RECORD_PERFORMANCE
   for (int32_t i = 0; i < level; ++i) {
     pSkipList->state.nLevelNodeCnt[i]++;
@@ -27,7 +27,7 @@ __attribute__ ((unused)) static FORCE_INLINE void recordNodeEachLevel(SSkipList 
 #endif
 }
 
-__attribute__ ((unused)) static FORCE_INLINE void removeNodeEachLevel(SSkipList *pSkipList, int32_t level) {
+UNUSED_FUNC static FORCE_INLINE void removeNodeEachLevel(SSkipList *pSkipList, int32_t level) {
 #if SKIP_LIST_RECORD_PERFORMANCE
   for (int32_t i = 0; i < level; ++i) {
     pSkipList->state.nLevelNodeCnt[i]--;
@@ -79,9 +79,12 @@ static SSkipListIterator* doCreateSkipListIterator(SSkipList *pSkipList, int32_t
 
 // when order is TSDB_ORDER_ASC, return the last node with key less than val
 // when order is TSDB_ORDER_DESC, return the first node with key large than val
-static SSkipListNode* getPriorNode(SSkipList* pSkipList, const char* val, int32_t order) {
+static SSkipListNode* getPriorNode(SSkipList* pSkipList, const char* val, int32_t order, SSkipListNode** pCur) {
   __compar_fn_t comparFn = pSkipList->comparFn;
   SSkipListNode *pNode = NULL;
+  if (pCur != NULL) {
+    *pCur = NULL;
+  }
 
   if (order == TSDB_ORDER_ASC) {
     pNode = pSkipList->pHead;
@@ -93,6 +96,9 @@ static SSkipListNode* getPriorNode(SSkipList* pSkipList, const char* val, int32_
           pNode = p;
           p = SL_GET_FORWARD_POINTER(p, i);
         } else {
+          if (pCur != NULL) {
+            *pCur = p;
+          }
           break;
         }
       }
@@ -107,6 +113,9 @@ static SSkipListNode* getPriorNode(SSkipList* pSkipList, const char* val, int32_
           pNode = p;
           p = SL_GET_BACKWARD_POINTER(p, i);
         } else {
+          if (pCur != NULL) {
+            *pCur = p;
+          }
           break;
         }
       }
@@ -132,7 +141,7 @@ static bool initForwardBackwardPtr(SSkipList* pSkipList) {
   pSkipList->pTail = (SSkipListNode*) ((char*) pSkipList->pHead + SL_NODE_HEADER_SIZE(maxLevel));
   pSkipList->pTail->level = pSkipList->maxLevel;
   
-  for(int32_t i = 0; i < maxLevel; ++i) {
+  for (uint32_t i = 0; i < maxLevel; ++i) {
     SL_GET_FORWARD_POINTER(pSkipList->pHead, i) = pSkipList->pTail;
     SL_GET_BACKWARD_POINTER(pSkipList->pTail, i) = pSkipList->pHead;
   }
@@ -177,7 +186,7 @@ SSkipList *tSkipListCreate(uint8_t maxLevel, uint8_t keyType, uint8_t keyLen, ui
     }
   }
 
-  srand(time(NULL));
+  srand((uint32_t)time(NULL));
 
 #if SKIP_LIST_RECORD_PERFORMANCE
   pSkipList->state.nTotalMemSize += sizeof(SSkipList);
@@ -295,7 +304,7 @@ SArray* tSkipListGet(SSkipList *pSkipList, SSkipListKey key) {
     pthread_rwlock_wrlock(pSkipList->lock);
   }
 
-  SSkipListNode* pNode = getPriorNode(pSkipList, key, TSDB_ORDER_ASC);
+  SSkipListNode* pNode = getPriorNode(pSkipList, key, TSDB_ORDER_ASC, NULL);
   while (1) {
     SSkipListNode *p = SL_GET_FORWARD_POINTER(pNode, 0);
     if (p == pSkipList->pTail) {
@@ -452,7 +461,7 @@ uint32_t tSkipListRemove(SSkipList *pSkipList, SSkipListKey key) {
     pthread_rwlock_wrlock(pSkipList->lock);
   }
 
-  SSkipListNode* pNode = getPriorNode(pSkipList, key, TSDB_ORDER_ASC);
+  SSkipListNode* pNode = getPriorNode(pSkipList, key, TSDB_ORDER_ASC, NULL);
   while (1) {
     SSkipListNode *p = SL_GET_FORWARD_POINTER(pNode, 0);
     if (p == pSkipList->pTail) {
@@ -545,7 +554,7 @@ SSkipListIterator *tSkipListCreateIterFromVal(SSkipList* pSkipList, const char* 
     pthread_rwlock_rdlock(pSkipList->lock);
   }
 
-  iter->cur = getPriorNode(pSkipList, val, order);
+  iter->cur = getPriorNode(pSkipList, val, order, &iter->next);
 
   if (pSkipList->lock) {
     pthread_rwlock_unlock(pSkipList->lock);
@@ -567,8 +576,22 @@ bool tSkipListIterNext(SSkipListIterator *iter) {
   
   if (iter->order == TSDB_ORDER_ASC) {  // ascending order iterate
     iter->cur = SL_GET_FORWARD_POINTER(iter->cur, 0);
+
+    // a new node is inserted into between iter->cur and iter->next, ignore it
+    if (iter->cur != iter->next && (iter->next != NULL)) {
+      iter->cur = iter->next;
+    }
+
+    iter->next = SL_GET_FORWARD_POINTER(iter->cur, 0);
   } else { // descending order iterate
     iter->cur = SL_GET_BACKWARD_POINTER(iter->cur, 0);
+
+    // a new node is inserted into between iter->cur and iter->next, ignore it
+    if (iter->cur != iter->next && (iter->next != NULL)) {
+      iter->cur = iter->next;
+    }
+
+    iter->next = SL_GET_BACKWARD_POINTER(iter->cur, 0);
   }
   
   if (pSkipList->lock) {
@@ -715,9 +738,11 @@ SSkipListIterator* doCreateSkipListIterator(SSkipList *pSkipList, int32_t order)
   iter->order = order;
   if(order == TSDB_ORDER_ASC) {
     iter->cur = pSkipList->pHead;
+    iter->next = SL_GET_FORWARD_POINTER(iter->cur, 0);
   } else {
     iter->cur = pSkipList->pTail;
+    iter->next = SL_GET_BACKWARD_POINTER(iter->cur, 0);
   }
-  
+
   return iter;
 }

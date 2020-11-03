@@ -13,6 +13,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 #include "tdataformat.h"
+#include "tulog.h"
 #include "talgo.h"
 #include "tcoding.h"
 #include "wchar.h"
@@ -311,10 +312,14 @@ void dataColSetOffset(SDataCol *pCol, int nEle) {
 
 SDataCols *tdNewDataCols(int maxRowSize, int maxCols, int maxRows) {
   SDataCols *pCols = (SDataCols *)calloc(1, sizeof(SDataCols));
-  if (pCols == NULL) return NULL;
+  if (pCols == NULL) {
+    uDebug("malloc failure, size:%" PRId64 " failed, reason:%s", (int64_t)sizeof(SDataCols), strerror(errno));
+    return NULL;
+  }
 
   pCols->cols = (SDataCol *)calloc(maxCols, sizeof(SDataCol));
   if (pCols->cols == NULL) {
+    uDebug("malloc failure, size:%" PRId64 " failed, reason:%s", (int64_t)sizeof(SDataCol) * maxCols, strerror(errno));
     tdFreeDataCols(pCols);
     return NULL;
   }
@@ -326,6 +331,7 @@ SDataCols *tdNewDataCols(int maxRowSize, int maxCols, int maxRows) {
 
   pCols->buf = malloc(pCols->bufSize);
   if (pCols->buf == NULL) {
+    uDebug("malloc failure, size:%" PRId64 " failed, reason:%s", (int64_t)sizeof(SDataCol) * maxCols, strerror(errno));
     tdFreeDataCols(pCols);
     return NULL;
   }
@@ -560,12 +566,12 @@ int tdSetKVRowDataOfCol(SKVRow *orow, int16_t colId, int8_t type, void *value) {
   SKVRow   nrow = NULL;
   void *   ptr = taosbsearch(&colId, kvRowColIdx(row), kvRowNCols(row), sizeof(SColIdx), comparTagId, TD_GE);
 
-  if (ptr == NULL || ((SColIdx *)ptr)->colId < colId) { // need to add a column value to the row
+  if (ptr == NULL || ((SColIdx *)ptr)->colId > colId) { // need to add a column value to the row
     int diff = IS_VAR_DATA_TYPE(type) ? varDataTLen(value) : TYPE_BYTES[type];
     nrow = malloc(kvRowLen(row) + sizeof(SColIdx) + diff);
     if (nrow == NULL) return -1;
 
-    kvRowSetLen(nrow, kvRowLen(row) + sizeof(SColIdx) + diff);
+    kvRowSetLen(nrow, kvRowLen(row) + (int16_t)sizeof(SColIdx) + diff);
     kvRowSetNCols(nrow, kvRowNCols(row) + 1);
 
     if (ptr == NULL) {
@@ -573,10 +579,10 @@ int tdSetKVRowDataOfCol(SKVRow *orow, int16_t colId, int8_t type, void *value) {
       memcpy(kvRowValues(nrow), kvRowValues(row), POINTER_DISTANCE(kvRowEnd(row), kvRowValues(row)));
       int colIdx = kvRowNCols(nrow) - 1;
       kvRowColIdxAt(nrow, colIdx)->colId = colId;
-      kvRowColIdxAt(nrow, colIdx)->offset = POINTER_DISTANCE(kvRowEnd(row), kvRowValues(row));
+      kvRowColIdxAt(nrow, colIdx)->offset = (int16_t)(POINTER_DISTANCE(kvRowEnd(row), kvRowValues(row)));
       memcpy(kvRowColVal(nrow, kvRowColIdxAt(nrow, colIdx)), value, diff);
     } else {
-      int16_t tlen = POINTER_DISTANCE(ptr, kvRowColIdx(row));
+      int16_t tlen = (int16_t)(POINTER_DISTANCE(ptr, kvRowColIdx(row)));
       if (tlen > 0) {
         memcpy(kvRowColIdx(nrow), kvRowColIdx(row), tlen);
         memcpy(kvRowValues(nrow), kvRowValues(row), ((SColIdx *)ptr)->offset);
@@ -617,7 +623,7 @@ int tdSetKVRowDataOfCol(SKVRow *orow, int16_t colId, int8_t type, void *value) {
         kvRowSetNCols(nrow, kvRowNCols(row));
 
         // Copy part ahead
-        nlen = POINTER_DISTANCE(ptr, kvRowColIdx(row));
+        nlen = (int16_t)(POINTER_DISTANCE(ptr, kvRowColIdx(row)));
         ASSERT(nlen % sizeof(SColIdx) == 0);
         if (nlen > 0) {
           ASSERT(((SColIdx *)ptr)->offset > 0);

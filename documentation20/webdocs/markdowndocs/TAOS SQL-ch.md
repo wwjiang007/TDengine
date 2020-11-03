@@ -31,10 +31,9 @@ taos> DESCRIBE meters;
 
 - 时间格式为```YYYY-MM-DD HH:mm:ss.MS```, 默认时间分辨率为毫秒。比如：```2017-08-12 18:25:58.128```
 - 内部函数now是服务器的当前时间
-- 插入记录时，如果时间戳为0，插入数据时使用服务器当前时间
+- 插入记录时，如果时间戳为now，插入数据时使用服务器当前时间
 - Epoch Time: 时间戳也可以是一个长整数，表示从1970-01-01 08:00:00.000开始的毫秒数
-- 时间可以加减，比如 now-2h，表明查询时刻向前推2个小时(最近2小时)。数字后面的时间单位：a(毫秒), s(秒), m(分), h(小时), d(天)，w(周), n(月), y(年)。比如select * from t1 where ts > now-2w and ts <= now-1w, 表示查询两周前整整一周的数据
-- TDengine暂不支持时间窗口按照自然年和自然月切分。Where条件中的时间窗口单位的换算关系如下：interval(1y) 等效于 interval(365d), interval(1n) 等效于 interval(30d), interval(1w) 等效于 interval(7d)
+- 时间可以加减，比如 now-2h，表明查询时刻向前推2个小时(最近2小时)。 数字后面的时间单位可以是 a(毫秒)、s(秒)、 m(分)、h(小时)、d(天)、w(周)。 比如select * from t1 where ts > now-2w and ts <= now-1w, 表示查询两周前整整一周的数据。 在指定降频操作(down sampling)的时间窗口(interval)时，时间单位还可以使用 n(自然月) 和 y(自然年)。
 
 TDengine缺省的时间戳是毫秒精度，但通过修改配置参数enableMicrosecond就可支持微秒。
 
@@ -42,7 +41,7 @@ TDengine缺省的时间戳是毫秒精度，但通过修改配置参数enableMic
 
 |      |   类型    | Bytes  | 说明                                                         |
 | ---- | :-------: | ------ | ------------------------------------------------------------ |
-| 1    | TIMESTAMP | 8      | 时间戳。最小精度毫秒。从格林威治时间 1970-01-01 00:00:00.000 (UTC/GMT) 开始，计时不能早于该时间。 |
+| 1    | TIMESTAMP | 8      | 时间戳。缺省精度毫秒，可支持微秒。从格林威治时间 1970-01-01 00:00:00.000 (UTC/GMT) 开始，计时不能早于该时间。 |
 | 2    |    INT    | 4      | 整型，范围 [-2^31+1,   2^31-1], -2^31用作Null           |
 | 3    |  BIGINT   | 8      | 长整型，范围 [-2^63+1,   2^63-1], -2^63用于NULL                                 |
 | 4    |   FLOAT   | 4      | 浮点型，有效位数6-7，范围 [-3.4E38, 3.4E38]                  |
@@ -82,12 +81,39 @@ TDengine缺省的时间戳是毫秒精度，但通过修改配置参数enableMic
     ```
     删除数据库。所包含的全部数据表将被删除，谨慎使用
 
+- **修改数据库参数**
+    ```mysql
+    ALTER DATABASE db_name COMP 2;
+    ```
+    COMP参数是指修改数据库文件压缩标志位，取值范围为[0, 2]. 0表示不压缩，1表示一阶段压缩，2表示两阶段压缩。
+
+    ```mysql
+    ALTER DATABASE db_name REPLICA 2;
+    ```
+    REPLICA参数是指修改数据库副本数，取值范围[1, 3]。在集群中使用，副本数必须小于dnode的数目。
+
+    ```mysql
+    ALTER DATABASE db_name KEEP 365;
+    ```
+    KEEP参数是指修改数据文件保存的天数，缺省值为3650，取值范围[days, 365000]，必须大于或等于days参数值。
+
+    ```mysql
+    ALTER DATABASE db_name QUORUM 2;
+    ```
+    QUORUM参数是指数据写入成功所需要的确认数。取值范围[1, 3]。对于异步复制，quorum设为1，具有master角色的虚拟节点自己确认即可。对于同步复制，需要至少大于等于2。原则上，Quorum >=1 并且 Quorum <= replica(副本数)，这个参数在启动一个同步模块实例时需要提供。
+
+    ```mysql
+    ALTER DATABASE db_name BLOCKS 100;
+    ```
+    BLOCKS参数是每个VNODE (TSDB) 中有多少cache大小的内存块，因此一个VNODE的用的内存大小粗略为（cache * blocks）。取值范围[3, 1000]。
+
+    **Tips**: 以上所有参数修改后都可以用show databases来确认是否修改成功。
+
 
 - **显示系统所有数据库**
     ```mysql
     SHOW DATABASES;
     ```
-
 
 ## 表管理
 - **创建数据表**
@@ -98,7 +124,8 @@ TDengine缺省的时间戳是毫秒精度，但通过修改配置参数enableMic
     说明：
     1) 表的第一个字段必须是TIMESTAMP，并且系统自动将其设为主键；
     2) 表名最大长度为193；
-    3) 表的每行长度不能超过16k个字符;     
+    3) 表的每行长度不能超过16k个字符;
+    4) 子表名只能由字母、数字和下划线组成，且不能以数字开头
     5) 使用数据类型binary或nchar，需指定其最长的字节数，如binary(20)，表示20字节；
 
 - **删除数据表**
@@ -157,7 +184,7 @@ TDengine缺省的时间戳是毫秒精度，但通过修改配置参数enableMic
     ```mysql
     DROP TABLE [IF EXISTS] stb_name;
     ```
-    删除STable会自动删除通过STable创建的字表。
+    删除STable会自动删除通过STable创建的子表。
 
 - **显示当前数据库下的所有超级表信息**
 
@@ -206,7 +233,7 @@ TDengine缺省的时间戳是毫秒精度，但通过修改配置参数enableMic
     ```
     修改超级表的标签名，从超级表修改某个标签名后，该超级表下的所有子表也会自动更新该标签名。
 
-- **修改字表标签值**
+- **修改子表标签值**
 
     ```mysql
     ALTER TABLE tb_name SET TAG tag_name=new_tag_value;
@@ -272,7 +299,7 @@ TDengine缺省的时间戳是毫秒精度，但通过修改配置参数enableMic
 SELECT select_expr [, select_expr ...]
     FROM {tb_name_list}
     [WHERE where_condition]
-    [INTERVAL [interval_offset,] interval_val]
+    [INTERVAL (interval_val [, interval_offset])]
     [FILL fill_val]
     [SLIDING fill_val]
     [GROUP BY col_list]
@@ -280,6 +307,30 @@ SELECT select_expr [, select_expr ...]
     [SLIMIT limit_val [, SOFFSET offset_val]]
     [LIMIT limit_val [, OFFSET offset_val]]
     [>> export_file]
+```
+说明：针对 insert 类型的 SQL 语句，我们采用的流式解析策略，在发现后面的错误之前，前面正确的部分SQL仍会执行。下面的sql中，insert语句是无效的，但是d1001仍会被创建。
+```mysql
+taos> create table meters(ts timestamp, current float, voltage int, phase float) tags(location binary(30), groupId int);
+Query OK, 0 row(s) affected (0.008245s)
+
+taos> show stables;
+              name              |      created_time       | columns |  tags  |   tables    |
+============================================================================================
+ meters                         | 2020-08-06 17:50:27.831 |       4 |      2 |           0 |
+Query OK, 1 row(s) in set (0.001029s)
+
+taos> show tables;
+Query OK, 0 row(s) in set (0.000946s)
+
+taos> insert into d1001 using meters tags('Beijing.Chaoyang', 2);
+
+DB error: invalid SQL: keyword VALUES or FILE required
+
+taos> show tables;
+           table_name           |      created_time       | columns |          stable_name           |
+======================================================================================================
+ d1001                          | 2020-08-06 17:52:02.097 |       4 | meters                         |
+Query OK, 1 row(s) in set (0.001091s)
 ```
 
 #### SELECT子句
@@ -313,6 +364,7 @@ taos> SELECT * FROM meters;
  2018-10-03 14:38:16.800 |             12.30000 |         221 |              0.31000 | Beijing.Chaoyang               |           2 |
 Query OK, 9 row(s) in set (0.002022s)
 ```
+
 
 通配符支持表名前缀，以下两个SQL语句均为返回全部的列：
 ```mysql
@@ -391,7 +443,7 @@ taos> SELECT database();
  power                          |
 Query OK, 1 row(s) in set (0.000079s)
 ```
-如果登录的时候没有指定默认数据库，且没有使用```use``命令切换数据，则返回NULL。
+如果登录的时候没有指定默认数据库，且没有使用```use```命令切换数据，则返回NULL。
 ```
 taos> SELECT database();
            database()           |
@@ -478,10 +530,10 @@ Query OK, 1 row(s) in set (0.001091s)
 | %         | match with any char sequences | **`binary`** **`nchar`**              |
 | _         | match with a single char      | **`binary`** **`nchar`**              |
 
-1. 同时进行多个字段的范围过滤需要使用关键词AND进行连接不同的查询条件，暂不支持OR连接的查询条件。
-2. 针对某一字段的过滤只支持单一区间的过滤条件。例如：value>20 and value<30是合法的过滤条件, 而Value<20 AND value<>5是非法的过滤条件。
+1. 同时进行多个字段的范围过滤需要使用关键词AND进行连接不同的查询条件，暂不支持OR连接的不同列之间的查询过滤条件。
+2. 针对某一字段的过滤只支持单一时间区间过滤条件。但是针对其他的（普通）列或标签列，可以使用``` OR``` 条件进行组合条件的查询过滤。例如：((value > 20 and value < 30)  OR (value < 12)) 。
 
-### Some Examples 
+### SQL 示例 
 
 - 对于下面的例子，表tb1用以下语句创建
 
@@ -513,7 +565,7 @@ Query OK, 1 row(s) in set (0.001091s)
     SELECT COUNT(*) FROM tb1 WHERE ts >= NOW - 10m AND col2 > 3.14 >> /home/testoutpu.csv;
     ```
 
-## SQL函数
+## SQL 函数
 
 ### 聚合函数
 
@@ -920,17 +972,17 @@ TDengine支持按时间段进行聚合，可以将表中数据按照时间段进
 ```mysql
 SELECT function_list FROM tb_name 
   [WHERE where_condition]
-  INTERVAL (interval)
+  INTERVAL (interval [, offset])
   [FILL ({NONE | VALUE | PREV | NULL | LINEAR})]
 
 SELECT function_list FROM stb_name 
   [WHERE where_condition]
-  INTERVAL (interval)
+  INTERVAL (interval [, offset])
   [FILL ({ VALUE | PREV | NULL | LINEAR})]
   [GROUP BY tags]
 ```
 
-- 聚合时间段的长度由关键词INTERVAL指定，最短时间间隔10毫秒（10a）。聚合查询中，能够同时执行的聚合和选择函数仅限于单个输出的函数：count、avg、sum 、stddev、leastsquares、percentile、min、max、first、last，不能使用具有多行输出结果的函数（例如：top、bottom、diff以及四则运算）。
+- 聚合时间段的长度由关键词INTERVAL指定，最短时间间隔10毫秒（10a），并且支持偏移（偏移必须小于间隔）。聚合查询中，能够同时执行的聚合和选择函数仅限于单个输出的函数：count、avg、sum 、stddev、leastsquares、percentile、min、max、first、last，不能使用具有多行输出结果的函数（例如：top、bottom、diff以及四则运算）。
 - WHERE语句可以指定查询的起止时间和其他过滤条件 
 - FILL语句指定某一时间区间数据缺失的情况下的填充模式。填充模式包括以下几种：
   1. 不进行填充：NONE(默认填充模式)。
@@ -968,5 +1020,5 @@ SELECT AVG(current),MAX(current),LEASTSQUARES(current, start_val, step_val), PER
 - 表名最大长度为193，每行数据最大长度16k个字符
 - 列名最大长度为65，最多允许1024列，最少需要2列，第一列必须是时间戳
 - 标签最多允许128个，可以0个，标签总长度不超过16k个字符
-- SQL语句最大长度65480个字符，但可通过系统配置参数maxSQLLength修改，最长可配置为8M
+- SQL语句最大长度65480个字符，但可通过系统配置参数maxSQLLength修改，最长可配置为1M
 - 库的数目，超级表的数目、表的数目，系统不做限制，仅受系统资源限制

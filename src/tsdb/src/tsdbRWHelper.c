@@ -14,13 +14,15 @@
  */
 
 #define _DEFAULT_SOURCE
+
+#define TAOS_RANDOM_FILE_FAIL_TEST
+
 #include "os.h"
 #include "talgo.h"
 #include "tchecksum.h"
 #include "tcoding.h"
 #include "tscompression.h"
 #include "tsdbMain.h"
-#define TAOS_RANDOM_FILE_FAIL_TEST
 
 #define TSDB_GET_COMPCOL_LEN(nCols) (sizeof(SCompData) + sizeof(SCompCol) * (nCols) + sizeof(TSCKSUM))
 #define TSDB_KEY_COL_OFFSET 0
@@ -91,7 +93,7 @@ void tsdbResetHelper(SRWHelper *pHelper) {
     tsdbResetHelperTableImpl(pHelper);
 
     // Reset the file part
-    tsdbCloseHelperFile(pHelper, false);
+    tsdbCloseHelperFile(pHelper, false, NULL);
     tsdbResetHelperFileImpl(pHelper);
 
     pHelper->state = TSDB_HELPER_CLEAR_STATE;
@@ -100,7 +102,8 @@ void tsdbResetHelper(SRWHelper *pHelper) {
 
 int tsdbSetAndOpenHelperFile(SRWHelper *pHelper, SFileGroup *pGroup) {
   ASSERT(pHelper != NULL && pGroup != NULL);
-  SFile *pFile = NULL;
+  SFile *    pFile = NULL;
+  STsdbRepo *pRepo = pHelper->pRepo;
 
   // Clear the helper object
   tsdbResetHelper(pHelper);
@@ -110,30 +113,17 @@ int tsdbSetAndOpenHelperFile(SRWHelper *pHelper, SFileGroup *pGroup) {
   // Set the files
   pHelper->files.fGroup = *pGroup;
   if (helperType(pHelper) == TSDB_WRITE_HELPER) {
-#ifdef TSDB_IDX
-    tsdbGetDataFileName(pHelper->pRepo, pGroup->fileId, TSDB_FILE_TYPE_NIDX, helperNewIdxF(pHelper)->fname);
-#endif
-    tsdbGetDataFileName(pHelper->pRepo, pGroup->fileId, TSDB_FILE_TYPE_NHEAD, helperNewHeadF(pHelper)->fname);
-    tsdbGetDataFileName(pHelper->pRepo, pGroup->fileId, TSDB_FILE_TYPE_NLAST, helperNewLastF(pHelper)->fname);
+    tsdbGetDataFileName(pRepo->rootDir, REPO_ID(pRepo), pGroup->fileId, TSDB_FILE_TYPE_NHEAD,
+                        helperNewHeadF(pHelper)->fname);
+    tsdbGetDataFileName(pRepo->rootDir, REPO_ID(pRepo), pGroup->fileId, TSDB_FILE_TYPE_NLAST,
+                        helperNewLastF(pHelper)->fname);
   }
 
   // Open the files
-#ifdef TSDB_IDX
-  if (tsdbOpenFile(helperIdxF(pHelper), O_RDONLY) < 0) return -1;
-#endif
   if (tsdbOpenFile(helperHeadF(pHelper), O_RDONLY) < 0) return -1;
   if (helperType(pHelper) == TSDB_WRITE_HELPER) {
     if (tsdbOpenFile(helperDataF(pHelper), O_RDWR) < 0) return -1;
     if (tsdbOpenFile(helperLastF(pHelper), O_RDWR) < 0) return -1;
-
-#ifdef TSDB_IDX
-    // Create and open .i file
-    pFile = helperNewIdxF(pHelper);
-    if (tsdbOpenFile(pFile, O_WRONLY | O_CREAT) < 0) return -1;
-    pFile->info.size = TSDB_FILE_HEAD_SIZE;
-    pFile->info.magic = TSDB_FILE_INIT_MAGIC;
-    if (tsdbUpdateFileHeader(pFile) < 0) return -1;
-#endif
 
     // Create and open .h
     pFile = helperNewHeadF(pHelper);
@@ -161,13 +151,8 @@ int tsdbSetAndOpenHelperFile(SRWHelper *pHelper, SFileGroup *pGroup) {
   return 0;
 }
 
-int tsdbCloseHelperFile(SRWHelper *pHelper, bool hasError) {
+int tsdbCloseHelperFile(SRWHelper *pHelper, bool hasError, SFileGroup *pGroup) {
   SFile *pFile = NULL;
-
-#ifdef TSDB_IDX
-  pFile = helperIdxF(pHelper);
-  tsdbCloseFile(pFile);
-#endif
 
   pFile = helperHeadF(pHelper);
   tsdbCloseFile(pFile);
@@ -177,10 +162,11 @@ int tsdbCloseHelperFile(SRWHelper *pHelper, bool hasError) {
     if (helperType(pHelper) == TSDB_WRITE_HELPER) {
       if (!hasError) {
         tsdbUpdateFileHeader(pFile);
-        fsync(pFile->fd);
       } else {
-        // TODO: shrink back to origin
+        ASSERT(pGroup != NULL);
+        taosFtruncate(pFile->fd, pGroup->files[TSDB_FILE_TYPE_DATA].info.size);
       }
+      fsync(pFile->fd);
     }
     tsdbCloseFile(pFile);
   }
@@ -190,27 +176,16 @@ int tsdbCloseHelperFile(SRWHelper *pHelper, bool hasError) {
     if (helperType(pHelper) == TSDB_WRITE_HELPER && !TSDB_NLAST_FILE_OPENED(pHelper)) {
       if (!hasError) {
         tsdbUpdateFileHeader(pFile);
-        fsync(pFile->fd);
       } else {
-        // TODO: shrink back to origin
+        ASSERT(pGroup != NULL);
+        taosFtruncate(pFile->fd, pGroup->files[TSDB_FILE_TYPE_LAST].info.size);
       }
+      fsync(pFile->fd);
     }
     tsdbCloseFile(pFile);
   }
 
   if (helperType(pHelper) == TSDB_WRITE_HELPER) {
-#ifdef TSDB_IDX
-    pFile = helperNewIdxF(pHelper);
-    if (pFile->fd > 0) {
-      if (!hasError) {
-        tsdbUpdateFileHeader(pFile);
-        fsync(pFile->fd);
-      }
-      tsdbCloseFile(pFile);
-      if (hasError) (void)remove(pFile->fname);
-    }
-#endif
-
     pFile = helperNewHeadF(pHelper);
     if (pFile->fd > 0) {
       if (!hasError) {
@@ -302,7 +277,7 @@ int tsdbCommitTableData(SRWHelper *pHelper, SCommitIter *pCommitIter, SDataCols 
   if (tsdbLoadCompInfo(pHelper, NULL) < 0) return -1;
 
   while (true) {
-    ASSERT(blkIdx <= pIdx->numOfBlocks);
+    ASSERT(blkIdx <= (int)pIdx->numOfBlocks);
     TSKEY keyFirst = tsdbNextIterKey(pCommitIter->pIter);
     if (keyFirst < 0 || keyFirst > maxKey) break;  // iter over
 
@@ -405,16 +380,12 @@ int tsdbWriteCompInfo(SRWHelper *pHelper) {
     pIdx->tid = pHelper->tableInfo.tid;
     ASSERT(pIdx->offset >= TSDB_FILE_HEAD_SIZE);
 
-    if (taosTWrite(pFile->fd, (void *)(pHelper->pCompInfo), pIdx->len) < pIdx->len) {
+    if (taosTWrite(pFile->fd, (void *)(pHelper->pCompInfo), pIdx->len) < (int)pIdx->len) {
       tsdbError("vgId:%d failed to write %d bytes to file %s since %s", REPO_ID(pHelper->pRepo), pIdx->len,
                 pFile->fname, strerror(errno));
       terrno = TAOS_SYSTEM_ERROR(errno);
       return -1;
     }
-
-#ifdef TSDB_IDX
-    pFile = helperNewIdxF(pHelper);
-#endif
 
     if (taosTSizeof(pHelper->pWIdx) < pFile->info.len + sizeof(SCompIdx) + 12) {
       pHelper->pWIdx = taosTRealloc(pHelper->pWIdx, taosTSizeof(pHelper->pWIdx) == 0 ? 1024 : taosTSizeof(pHelper->pWIdx) * 2);
@@ -426,6 +397,9 @@ int tsdbWriteCompInfo(SRWHelper *pHelper) {
 
     void *pBuf = POINTER_SHIFT(pHelper->pWIdx, pFile->info.len);
     pFile->info.len += tsdbEncodeSCompIdx(&pBuf, &(pHelper->curCompIdx));
+
+    pFile->info.size += pIdx->len;
+    // ASSERT(pFile->info.size == lseek(pFile->fd, 0, SEEK_CUR));
   }
 
   return 0;
@@ -435,11 +409,7 @@ int tsdbWriteCompIdx(SRWHelper *pHelper) {
   ASSERT(helperType(pHelper) == TSDB_WRITE_HELPER);
   off_t offset = 0;
 
-#ifdef TSDB_IDX
-  SFile *pFile = helperNewIdxF(pHelper);
-#else
   SFile *pFile = helperNewHeadF(pHelper);
-#endif
 
   pFile->info.len += sizeof(TSCKSUM);
   if (taosTSizeof(pHelper->pWIdx) < pFile->info.len) {
@@ -460,26 +430,80 @@ int tsdbWriteCompIdx(SRWHelper *pHelper) {
     return -1;
   }
 
-  pFile->info.offset = offset;
+  ASSERT(offset == pFile->info.size);
 
-  if (taosTWrite(pFile->fd, (void *)pHelper->pWIdx, pFile->info.len) < pFile->info.len) {
+  if (taosTWrite(pFile->fd, (void *)pHelper->pWIdx, pFile->info.len) < (int)pFile->info.len) {
     tsdbError("vgId:%d failed to write %d bytes to file %s since %s", REPO_ID(pHelper->pRepo), pFile->info.len,
               pFile->fname, strerror(errno));
     terrno = TAOS_SYSTEM_ERROR(errno);
     return -1;
   }
 
+  pFile->info.offset = offset;
+  pFile->info.size += pFile->info.len;
+  // ASSERT(pFile->info.size == lseek(pFile->fd, 0, SEEK_CUR));
+
+  return 0;
+}
+
+int tsdbLoadCompIdxImpl(SFile *pFile, uint32_t offset, uint32_t len, void *buffer) {
+  const char *prefixMsg = "failed to load SCompIdx part";
+  if (lseek(pFile->fd, offset, SEEK_SET) < 0) {
+    tsdbError("%s: seek to file %s offset %u failed since %s", prefixMsg, pFile->fname, offset, strerror(errno));
+    terrno = TAOS_SYSTEM_ERROR(errno);
+    return -1;
+  }
+
+  if (taosTRead(pFile->fd, buffer, len) < len) {
+    tsdbError("%s: read file %s offset %u len %u failed since %s", prefixMsg, pFile->fname, offset, len,
+              strerror(errno));
+    terrno = TSDB_CODE_TDB_FILE_CORRUPTED;
+    return -1;
+  }
+
+  if (!taosCheckChecksumWhole((uint8_t *)buffer, len)) {
+    tsdbError("%s: file %s corrupted, offset %u len %u", prefixMsg, pFile->fname, offset, len);
+    terrno = TSDB_CODE_TDB_FILE_CORRUPTED;
+    return -1;
+  }
+
+  return 0;
+}
+
+int tsdbDecodeSCompIdxImpl(void *buffer, uint32_t len, SCompIdx **ppCompIdx, int *numOfIdx) {
+  int   nIdx = 0;
+  void *pPtr = buffer;
+
+  while (POINTER_DISTANCE(pPtr, buffer) < (int)(len - sizeof(TSCKSUM))) {
+    size_t tlen = taosTSizeof(*ppCompIdx);
+    if (tlen < sizeof(SCompIdx) * (nIdx + 1)) {
+      *ppCompIdx = (SCompIdx *)taosTRealloc(*ppCompIdx, (tlen == 0) ? 1024 : tlen * 2);
+      if (*ppCompIdx == NULL) {
+        terrno = TSDB_CODE_TDB_OUT_OF_MEMORY;
+        return -1;
+      }
+    }
+
+    pPtr = tsdbDecodeSCompIdx(pPtr, &((*ppCompIdx)[nIdx]));
+    if (pPtr == NULL) {
+      tsdbError("failed to decode SCompIdx part, idx:%d", nIdx);
+      terrno = TSDB_CODE_TDB_FILE_CORRUPTED;
+      return -1;
+    }
+
+    nIdx++;
+
+    ASSERT(nIdx == 1 || (*ppCompIdx)[nIdx - 1].tid > (*ppCompIdx)[nIdx - 2].tid);
+    ASSERT(POINTER_DISTANCE(pPtr, buffer) <= (int)(len - sizeof(TSCKSUM)));
+  }
+
+  *numOfIdx = nIdx;
   return 0;
 }
 
 int tsdbLoadCompIdx(SRWHelper *pHelper, void *target) {
   ASSERT(pHelper->state == TSDB_HELPER_FILE_SET_AND_OPEN);
-#ifdef TSDB_IDX
-  SFile *pFile = helperIdxF(pHelper);
-#else
   SFile *pFile = helperHeadF(pHelper);
-#endif
-  int fd = pFile->fd;
 
   if (!helperHasState(pHelper, TSDB_HELPER_IDX_LOAD)) {
     // If not load from file, just load it in object
@@ -489,53 +513,17 @@ int tsdbLoadCompIdx(SRWHelper *pHelper, void *target) {
         return -1;
       }
 
-      if (lseek(fd, pFile->info.offset, SEEK_SET) < 0) {
-        tsdbError("vgId:%d failed to lseek file %s since %s", REPO_ID(pHelper->pRepo), pFile->fname, strerror(errno));
-        terrno = TAOS_SYSTEM_ERROR(errno);
+      // Load SCompIdx binary from file
+      if (tsdbLoadCompIdxImpl(pFile, pFile->info.offset, pFile->info.len, (void *)(pHelper->pBuffer)) < 0) {
         return -1;
       }
 
-      if (taosTRead(fd, (void *)(pHelper->pBuffer), pFile->info.len) < pFile->info.len) {
-        tsdbError("vgId:%d failed to read %d bytes from file %s since %s", REPO_ID(pHelper->pRepo), pFile->info.len,
-                  pFile->fname, strerror(errno));
-        terrno = TAOS_SYSTEM_ERROR(errno);
+      // Decode the SCompIdx part
+      if (tsdbDecodeSCompIdxImpl(pHelper->pBuffer, pFile->info.len, &(pHelper->idxH.pIdxArray),
+                                 &(pHelper->idxH.numOfIdx)) < 0) {
+        tsdbError("vgId:%d failed to decode SCompIdx part from file %s since %s", REPO_ID(pHelper->pRepo), pFile->fname,
+                  tstrerror(errno));
         return -1;
-      }
-
-      if (!taosCheckChecksumWhole((uint8_t *)(pHelper->pBuffer), pFile->info.len)) {
-        tsdbError("vgId:%d file %s SCompIdx part is corrupted. len %u", REPO_ID(pHelper->pRepo), pFile->fname,
-                  pFile->info.len);
-        terrno = TSDB_CODE_TDB_FILE_CORRUPTED;
-        return -1;
-      }
-
-      // Decode it
-      pHelper->idxH.numOfIdx = 0;
-      void *ptr = pHelper->pBuffer;
-      while (POINTER_DISTANCE(ptr, pHelper->pBuffer) < (pFile->info.len - sizeof(TSCKSUM))) {
-        size_t tlen = taosTSizeof(pHelper->idxH.pIdxArray);
-        pHelper->idxH.numOfIdx++;
-
-        if (tlen < pHelper->idxH.numOfIdx * sizeof(SCompIdx)) {
-          pHelper->idxH.pIdxArray = (SCompIdx *)taosTRealloc(pHelper->idxH.pIdxArray, (tlen == 0) ? 1024 : tlen * 2);
-          if (pHelper->idxH.pIdxArray == NULL) {
-            terrno = TSDB_CODE_TDB_OUT_OF_MEMORY;
-            return -1;
-          }
-        }
-
-        ptr = tsdbDecodeSCompIdx(ptr, &(pHelper->idxH.pIdxArray[pHelper->idxH.numOfIdx - 1]));
-        if (ptr == NULL) {
-          tsdbError("vgId:%d file %s SCompIdx part is corrupted. len %u", REPO_ID(pHelper->pRepo), pFile->fname,
-                    pFile->info.len);
-          terrno = TSDB_CODE_TDB_FILE_CORRUPTED;
-          return -1;
-        }
-
-        ASSERT(pHelper->idxH.numOfIdx == 1 || pHelper->idxH.pIdxArray[pHelper->idxH.numOfIdx - 1].tid >
-                                                  pHelper->idxH.pIdxArray[pHelper->idxH.numOfIdx - 2].tid);
-
-        ASSERT(POINTER_DISTANCE(ptr, pHelper->pBuffer) <= pFile->info.len - sizeof(TSCKSUM));
       }
     }
   }
@@ -548,36 +536,49 @@ int tsdbLoadCompIdx(SRWHelper *pHelper, void *target) {
   return 0;
 }
 
+int tsdbLoadCompInfoImpl(SFile *pFile, SCompIdx *pIdx, SCompInfo **ppCompInfo) {
+  const char *prefixMsg = "failed to load SCompInfo/SCompBlock part";
+
+  if (lseek(pFile->fd, pIdx->offset, SEEK_SET) < 0) {
+    tsdbError("%s: seek to file %s offset %u failed since %s", prefixMsg, pFile->fname, pIdx->offset, strerror(errno));
+    terrno = TAOS_SYSTEM_ERROR(errno);
+    return -1;
+  }
+
+  *ppCompInfo = taosTRealloc((void *)(*ppCompInfo), pIdx->len);
+  if (*ppCompInfo == NULL) {
+    terrno = TSDB_CODE_TDB_OUT_OF_MEMORY;
+    return -1;
+  }
+
+  if (taosTRead(pFile->fd, (void *)(*ppCompInfo), pIdx->len) < (int)pIdx->len) {
+    tsdbError("%s: read file %s offset %u len %u failed since %s", prefixMsg, pFile->fname, pIdx->offset, pIdx->len,
+              strerror(errno));
+    terrno = TAOS_SYSTEM_ERROR(errno);
+    return -1;
+  }
+
+  if (!taosCheckChecksumWhole((uint8_t *)(*ppCompInfo), pIdx->len)) {
+    tsdbError("%s: file %s corrupted, offset %u len %u", prefixMsg, pFile->fname, pIdx->offset, pIdx->len);
+    terrno = TSDB_CODE_TDB_FILE_CORRUPTED;
+    return -1;
+  }
+
+  return 0;
+}
+
 int tsdbLoadCompInfo(SRWHelper *pHelper, void *target) {
   ASSERT(helperHasState(pHelper, TSDB_HELPER_TABLE_SET));
 
   SCompIdx *pIdx = &(pHelper->curCompIdx);
 
-  int fd = helperHeadF(pHelper)->fd;
+  SFile *pFile = helperHeadF(pHelper);
 
   if (!helperHasState(pHelper, TSDB_HELPER_INFO_LOAD)) {
     if (pIdx->offset > 0) {
       ASSERT(pIdx->uid == pHelper->tableInfo.uid);
-      if (lseek(fd, pIdx->offset, SEEK_SET) < 0) {
-        tsdbError("vgId:%d failed to lseek file %s since %s", REPO_ID(pHelper->pRepo), helperHeadF(pHelper)->fname,
-                  strerror(errno));
-        terrno = TAOS_SYSTEM_ERROR(errno);
-        return -1;
-      }
 
-      pHelper->pCompInfo = taosTRealloc((void *)pHelper->pCompInfo, pIdx->len);
-      if (taosTRead(fd, (void *)(pHelper->pCompInfo), pIdx->len) < pIdx->len) {
-        tsdbError("vgId:%d failed to read %d bytes from file %s since %s", REPO_ID(pHelper->pRepo), pIdx->len,
-                  helperHeadF(pHelper)->fname, strerror(errno));
-        terrno = TAOS_SYSTEM_ERROR(errno);
-        return -1;
-      }
-      if (!taosCheckChecksumWhole((uint8_t *)pHelper->pCompInfo, pIdx->len)) {
-        tsdbError("vgId:%d file %s SCompInfo part is corrupted, tid %d uid %" PRIu64, REPO_ID(pHelper->pRepo),
-                  helperHeadF(pHelper)->fname, pHelper->tableInfo.tid, pHelper->tableInfo.uid);
-        terrno = TSDB_CODE_TDB_FILE_CORRUPTED;
-        return -1;
-      }
+      if (tsdbLoadCompInfoImpl(pFile, pIdx, &(pHelper->pCompInfo)) < 0) return -1;
 
       ASSERT(pIdx->uid == pHelper->pCompInfo->uid && pIdx->tid == pHelper->pCompInfo->tid);
     }
@@ -594,7 +595,7 @@ int tsdbLoadCompData(SRWHelper *pHelper, SCompBlock *pCompBlock, void *target) {
   ASSERT(pCompBlock->numOfSubBlocks <= 1);
   SFile *pFile = (pCompBlock->last) ? helperLastF(pHelper) : helperDataF(pHelper);
 
-  if (lseek(pFile->fd, pCompBlock->offset, SEEK_SET) < 0) {
+  if (lseek(pFile->fd, (off_t)pCompBlock->offset, SEEK_SET) < 0) {
     tsdbError("vgId:%d failed to lseek file %s since %s", REPO_ID(pHelper->pRepo), pFile->fname, strerror(errno));
     terrno = TAOS_SYSTEM_ERROR(errno);
     return -1;
@@ -608,14 +609,14 @@ int tsdbLoadCompData(SRWHelper *pHelper, SCompBlock *pCompBlock, void *target) {
   }
 
   if (taosTRead(pFile->fd, (void *)pHelper->pCompData, tsize) < tsize) {
-    tsdbError("vgId:%d failed to read %zu bytes from file %s since %s", REPO_ID(pHelper->pRepo), tsize, pFile->fname,
+    tsdbError("vgId:%d failed to read %" PRIzu " bytes from file %s since %s", REPO_ID(pHelper->pRepo), tsize, pFile->fname,
               strerror(errno));
     terrno = TAOS_SYSTEM_ERROR(errno);
     return -1;
   }
 
-  if (!taosCheckChecksumWhole((uint8_t *)pHelper->pCompData, tsize)) {
-    tsdbError("vgId:%d file %s is broken, offset %" PRId64 " size %zu", REPO_ID(pHelper->pRepo), pFile->fname,
+  if (!taosCheckChecksumWhole((uint8_t *)pHelper->pCompData, (uint32_t)tsize)) {
+    tsdbError("vgId:%d file %s is broken, offset %" PRId64 " size %" PRIzu "", REPO_ID(pHelper->pRepo), pFile->fname,
               (int64_t)pCompBlock->offset, tsize);
     terrno = TSDB_CODE_TDB_FILE_CORRUPTED;
     return -1;
@@ -766,7 +767,7 @@ static int tsdbWriteBlockToFile(SRWHelper *pHelper, SFile *pFile, SDataCols *pDa
   int32_t lsize = tsize;
   int32_t keyLen = 0;
   for (int ncol = 0; ncol < pDataCols->numOfCols; ncol++) {
-    if (tcol >= nColsNotAllNull) break;
+    if (ncol != 0 && tcol >= nColsNotAllNull) break;
 
     SDataCol *pDataCol = pDataCols->cols + ncol;
     SCompCol *pCompCol = pCompData->cols + tcol;
@@ -787,8 +788,8 @@ static int tsdbWriteBlockToFile(SRWHelper *pHelper, SFile *pFile, SDataCols *pDa
       }
 
       flen = (*(tDataTypeDesc[pDataCol->type].compFunc))((char *)pDataCol->pData, tlen, rowsToWrite, tptr,
-                                                         taosTSizeof(pHelper->pBuffer) - lsize, pCfg->compression,
-                                                         pHelper->compBuffer, taosTSizeof(pHelper->compBuffer));
+                                                         (int32_t)taosTSizeof(pHelper->pBuffer) - lsize, pCfg->compression,
+                                                         pHelper->compBuffer, (int32_t)taosTSizeof(pHelper->compBuffer));
     } else {
       flen = tlen;
       memcpy(tptr, pDataCol->pData, flen);
@@ -847,6 +848,9 @@ static int tsdbWriteBlockToFile(SRWHelper *pHelper, SFile *pFile, SDataCols *pDa
             (int)(pCompBlock->numOfRows), pCompBlock->len, pCompBlock->numOfCols, pCompBlock->keyFirst,
             pCompBlock->keyLast);
 
+  pFile->info.size += pCompBlock->len;
+  // ASSERT(pFile->info.size == lseek(pFile->fd, 0, SEEK_CUR));
+
   return 0;
 
 _err:
@@ -879,7 +883,7 @@ static int tsdbAdjustInfoSizeIfNeeded(SRWHelper *pHelper, size_t esize) {
 static int tsdbInsertSuperBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int blkIdx) {
   SCompIdx *pIdx = &(pHelper->curCompIdx);
 
-  ASSERT(blkIdx >= 0 && blkIdx <= pIdx->numOfBlocks);
+  ASSERT(blkIdx >= 0 && blkIdx <= (int)pIdx->numOfBlocks);
   ASSERT(pCompBlock->numOfSubBlocks == 1);
 
   // Adjust memory if no more room
@@ -887,7 +891,7 @@ static int tsdbInsertSuperBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int 
   if (tsdbAdjustInfoSizeIfNeeded(pHelper, pIdx->len + sizeof(SCompInfo)) < 0) goto _err;
 
   // Change the offset
-  for (int i = 0; i < pIdx->numOfBlocks; i++) {
+  for (uint32_t i = 0; i < pIdx->numOfBlocks; i++) {
     SCompBlock *pTCompBlock = &pHelper->pCompInfo->blocks[i];
     if (pTCompBlock->numOfSubBlocks > 1) pTCompBlock->offset += sizeof(SCompBlock);
   }
@@ -906,7 +910,7 @@ static int tsdbInsertSuperBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int 
   pIdx->len += sizeof(SCompBlock);
   ASSERT(pIdx->len <= taosTSizeof(pHelper->pCompInfo));
   pIdx->maxKey = blockAtIdx(pHelper, pIdx->numOfBlocks - 1)->keyLast;
-  pIdx->hasLast = blockAtIdx(pHelper, pIdx->numOfBlocks - 1)->last;
+  pIdx->hasLast = (uint32_t)blockAtIdx(pHelper, pIdx->numOfBlocks - 1)->last;
 
   if (pIdx->numOfBlocks > 1) {
     ASSERT(pHelper->pCompInfo->blocks[0].keyLast < pHelper->pCompInfo->blocks[1].keyFirst);
@@ -925,7 +929,7 @@ static int tsdbAddSubBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int blkId
   ASSERT(pCompBlock->numOfSubBlocks == 0);
 
   SCompIdx *pIdx = &(pHelper->curCompIdx);
-  ASSERT(blkIdx >= 0 && blkIdx < pIdx->numOfBlocks);
+  ASSERT(blkIdx >= 0 && blkIdx < (int)pIdx->numOfBlocks);
 
   SCompBlock *pSCompBlock = pHelper->pCompInfo->blocks + blkIdx;
   ASSERT(pSCompBlock->numOfSubBlocks >= 1 && pSCompBlock->numOfSubBlocks < TSDB_MAX_SUBBLOCKS);
@@ -938,12 +942,12 @@ static int tsdbAddSubBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int blkId
 
   // Add the sub-block
   if (pSCompBlock->numOfSubBlocks > 1) {
-    size_t tsize = pIdx->len - (pSCompBlock->offset + pSCompBlock->len);
+    size_t tsize = (size_t)(pIdx->len - (pSCompBlock->offset + pSCompBlock->len));
     if (tsize > 0) {
       memmove((void *)((char *)(pHelper->pCompInfo) + pSCompBlock->offset + pSCompBlock->len + sizeof(SCompBlock)),
               (void *)((char *)(pHelper->pCompInfo) + pSCompBlock->offset + pSCompBlock->len), tsize);
 
-      for (int i = blkIdx + 1; i < pIdx->numOfBlocks; i++) {
+      for (uint32_t i = blkIdx + 1; i < pIdx->numOfBlocks; i++) {
         SCompBlock *pTCompBlock = &pHelper->pCompInfo->blocks[i];
         if (pTCompBlock->numOfSubBlocks > 1) pTCompBlock->offset += sizeof(SCompBlock);
       }
@@ -960,7 +964,7 @@ static int tsdbAddSubBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int blkId
     pIdx->len += sizeof(SCompBlock);
   } else {  // Need to create two sub-blocks
     void *ptr = NULL;
-    for (int i = blkIdx + 1; i < pIdx->numOfBlocks; i++) {
+    for (uint32_t i = blkIdx + 1; i < pIdx->numOfBlocks; i++) {
       SCompBlock *pTCompBlock = pHelper->pCompInfo->blocks + i;
       if (pTCompBlock->numOfSubBlocks > 1) {
         ptr = POINTER_SHIFT(pHelper->pCompInfo, pTCompBlock->offset);
@@ -973,7 +977,7 @@ static int tsdbAddSubBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int blkId
     size_t tsize = pIdx->len - ((char *)ptr - (char *)(pHelper->pCompInfo));
     if (tsize > 0) {
       memmove(POINTER_SHIFT(ptr, sizeof(SCompBlock) * 2), ptr, tsize);
-      for (int i = blkIdx + 1; i < pIdx->numOfBlocks; i++) {
+      for (uint32_t i = blkIdx + 1; i < pIdx->numOfBlocks; i++) {
         SCompBlock *pTCompBlock = pHelper->pCompInfo->blocks + i;
         if (pTCompBlock->numOfSubBlocks > 1) pTCompBlock->offset += (sizeof(SCompBlock) * 2);
       }
@@ -995,7 +999,7 @@ static int tsdbAddSubBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int blkId
   }
 
   pIdx->maxKey = pHelper->pCompInfo->blocks[pIdx->numOfBlocks - 1].keyLast;
-  pIdx->hasLast = pHelper->pCompInfo->blocks[pIdx->numOfBlocks - 1].last;
+  pIdx->hasLast = (uint32_t)pHelper->pCompInfo->blocks[pIdx->numOfBlocks - 1].last;
 
   tsdbDebug("vgId:%d tid:%d a subblock is added at index %d", REPO_ID(pHelper->pRepo), pHelper->tableInfo.tid, blkIdx);
 
@@ -1010,7 +1014,7 @@ static int tsdbUpdateSuperBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int 
 
   SCompIdx *pIdx = &(pHelper->curCompIdx);
 
-  ASSERT(blkIdx >= 0 && blkIdx < pIdx->numOfBlocks);
+  ASSERT(blkIdx >= 0 && blkIdx < (int)pIdx->numOfBlocks);
 
   SCompBlock *pSCompBlock = pHelper->pCompInfo->blocks + blkIdx;
 
@@ -1018,13 +1022,13 @@ static int tsdbUpdateSuperBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int 
 
   // Delete the sub blocks it has
   if (pSCompBlock->numOfSubBlocks > 1) {
-    size_t tsize = pIdx->len - (pSCompBlock->offset + pSCompBlock->len);
+    size_t tsize = (size_t)(pIdx->len - (pSCompBlock->offset + pSCompBlock->len));
     if (tsize > 0) {
       memmove(POINTER_SHIFT(pHelper->pCompInfo, pSCompBlock->offset),
               POINTER_SHIFT(pHelper->pCompInfo, pSCompBlock->offset + pSCompBlock->len), tsize);
     }
 
-    for (int i = blkIdx + 1; i < pIdx->numOfBlocks; i++) {
+    for (uint32_t i = blkIdx + 1; i < pIdx->numOfBlocks; i++) {
       SCompBlock *pTCompBlock = &pHelper->pCompInfo->blocks[i];
       if (pTCompBlock->numOfSubBlocks > 1) pTCompBlock->offset -= (sizeof(SCompBlock) * pSCompBlock->numOfSubBlocks);
     }
@@ -1035,7 +1039,7 @@ static int tsdbUpdateSuperBlock(SRWHelper *pHelper, SCompBlock *pCompBlock, int 
   *pSCompBlock = *pCompBlock;
 
   pIdx->maxKey = blockAtIdx(pHelper, pIdx->numOfBlocks - 1)->keyLast;
-  pIdx->hasLast = blockAtIdx(pHelper, pIdx->numOfBlocks - 1)->last;
+  pIdx->hasLast = (uint32_t)blockAtIdx(pHelper, pIdx->numOfBlocks - 1)->last;
 
   tsdbDebug("vgId:%d tid:%d a super block is updated at index %d", REPO_ID(pHelper->pRepo), pHelper->tableInfo.tid,
             blkIdx);
@@ -1052,10 +1056,6 @@ static void tsdbResetHelperFileImpl(SRWHelper *pHelper) {
   helperLastF(pHelper)->fd = -1;
   helperNewHeadF(pHelper)->fd = -1;
   helperNewLastF(pHelper)->fd = -1;
-#ifdef TSDB_IDX
-  helperIdxF(pHelper)->fd = -1;
-  helperNewIdxF(pHelper)->fd = -1;
-#endif
 }
 
 static int tsdbInitHelperFile(SRWHelper *pHelper) {
@@ -1064,7 +1064,7 @@ static int tsdbInitHelperFile(SRWHelper *pHelper) {
 }
 
 static void tsdbDestroyHelperFile(SRWHelper *pHelper) {
-  tsdbCloseHelperFile(pHelper, false);
+  tsdbCloseHelperFile(pHelper, false, NULL);
   tsdbResetHelperFileImpl(pHelper);
   taosTZfree(pHelper->idxH.pIdxArray);
   taosTZfree(pHelper->pWIdx);
@@ -1164,8 +1164,15 @@ static int tsdbCheckAndDecodeColumnData(SDataCol *pDataCol, char *content, int32
   // Decode the data
   if (comp) {
     // // Need to decompress
-    pDataCol->len = (*(tDataTypeDesc[pDataCol->type].decompFunc))(
-        content, len - sizeof(TSCKSUM), numOfRows, pDataCol->pData, pDataCol->spaceSize, comp, buffer, bufferSize);
+    int tlen = (*(tDataTypeDesc[pDataCol->type].decompFunc))(content, len - sizeof(TSCKSUM), numOfRows, pDataCol->pData,
+                                                             pDataCol->spaceSize, comp, buffer, bufferSize);
+    if (tlen <= 0) {
+      tsdbError("Failed to decompress column, file corrupted, len:%d comp:%d numOfRows:%d maxPoints:%d bufferSize:%d",
+                len, comp, numOfRows, maxPoints, bufferSize);
+      terrno = TSDB_CODE_TDB_FILE_CORRUPTED;
+      return -1;
+    }
+    pDataCol->len = tlen;
     if (pDataCol->type == TSDB_DATA_TYPE_BINARY || pDataCol->type == TSDB_DATA_TYPE_NCHAR) {
       dataColSetOffset(pDataCol, numOfRows);
     }
@@ -1197,7 +1204,7 @@ static int tsdbLoadColData(SRWHelper *pHelper, SFile *pFile, SCompBlock *pCompBl
   }
 
   int64_t offset = pCompBlock->offset + TSDB_GET_COMPCOL_LEN(pCompBlock->numOfCols) + pCompCol->offset;
-  if (lseek(pFile->fd, offset, SEEK_SET) < 0) {
+  if (lseek(pFile->fd, (off_t)offset, SEEK_SET) < 0) {
     tsdbError("vgId:%d failed to lseek file %s since %s", REPO_ID(pHelper->pRepo), pFile->fname, strerror(errno));
     terrno = TAOS_SYSTEM_ERROR(errno);
     return -1;
@@ -1212,7 +1219,7 @@ static int tsdbLoadColData(SRWHelper *pHelper, SFile *pFile, SCompBlock *pCompBl
 
   if (tsdbCheckAndDecodeColumnData(pDataCol, pHelper->pBuffer, pCompCol->len, pCompBlock->algorithm,
                                    pCompBlock->numOfRows, pHelper->pRepo->config.maxRowsPerFileBlock,
-                                   pHelper->compBuffer, taosTSizeof(pHelper->compBuffer)) < 0) {
+                                   pHelper->compBuffer, (int32_t)taosTSizeof(pHelper->compBuffer)) < 0) {
     tsdbError("vgId:%d file %s is broken at column %d offset %" PRId64, REPO_ID(pHelper->pRepo), pFile->fname,
               pCompCol->colId, offset);
     return -1;
@@ -1312,7 +1319,7 @@ static int tsdbLoadBlockDataImpl(SRWHelper *pHelper, SCompBlock *pCompBlock, SDa
   SCompData *pCompData = (SCompData *)pHelper->pBuffer;
 
   int fd = pFile->fd;
-  if (lseek(fd, pCompBlock->offset, SEEK_SET) < 0) {
+  if (lseek(fd, (off_t)pCompBlock->offset, SEEK_SET) < 0) {
     tsdbError("vgId:%d tid:%d failed to lseek file %s since %s", REPO_ID(pHelper->pRepo), pHelper->tableInfo.tid,
               pFile->fname, strerror(errno));
     terrno = TAOS_SYSTEM_ERROR(errno);
@@ -1341,7 +1348,7 @@ static int tsdbLoadBlockDataImpl(SRWHelper *pHelper, SCompBlock *pCompBlock, SDa
   int dcol = 0;  // loop iter for SDataCols object
   while (dcol < pDataCols->numOfCols) {
     SDataCol *pDataCol = &(pDataCols->cols[dcol]);
-    if (ccol >= pCompData->numOfCols) {
+    if (dcol != 0 && ccol >= pCompData->numOfCols) {
       // Set current column as NULL and forward
       dataColSetNEleNull(pDataCol, pCompBlock->numOfRows, pDataCols->maxPoints);
       dcol++;
@@ -1375,7 +1382,7 @@ static int tsdbLoadBlockDataImpl(SRWHelper *pHelper, SCompBlock *pCompBlock, SDa
       }
       if (tsdbCheckAndDecodeColumnData(pDataCol, (char *)pCompData + tsize + toffset, tlen, pCompBlock->algorithm,
                                        pCompBlock->numOfRows, pDataCols->maxPoints, pHelper->compBuffer,
-                                       taosTSizeof(pHelper->compBuffer)) < 0) {
+                                       (int32_t)taosTSizeof(pHelper->compBuffer)) < 0) {
         tsdbError("vgId:%d file %s is broken at column %d block offset %" PRId64 " column offset %d",
                   REPO_ID(pHelper->pRepo), pFile->fname, tcolId, (int64_t)pCompBlock->offset, toffset);
         goto _err;
@@ -1499,7 +1506,7 @@ static int tsdbProcessMergeCommit(SRWHelper *pHelper, SCommitIter *pCommitIter, 
   SCompBlock *pCompBlock = taosbsearch((void *)(&keyFirst), (void *)blockAtIdx(pHelper, *blkIdx),
                                        pIdx->numOfBlocks - *blkIdx, sizeof(SCompBlock), compareKeyBlock, TD_GE);
   ASSERT(pCompBlock != NULL);
-  int tblkIdx = TSDB_GET_COMPBLOCK_IDX(pHelper, pCompBlock);
+  int tblkIdx = (int32_t)(TSDB_GET_COMPBLOCK_IDX(pHelper, pCompBlock));
 
   if (pCompBlock->last) {
     ASSERT(pCompBlock->numOfRows < pCfg->minRowsPerFileBlock && tblkIdx == pIdx->numOfBlocks - 1);

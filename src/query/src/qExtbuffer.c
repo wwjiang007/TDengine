@@ -12,15 +12,14 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
-#include "qExtbuffer.h"
 #include "os.h"
+#include "qExtbuffer.h"
 #include "queryLog.h"
 #include "taos.h"
 #include "taosdef.h"
 #include "taosmsg.h"
 #include "tsqlfunction.h"
 #include "tulog.h"
-#include "tutil.h"
 
 #define COLMODEL_GET_VAL(data, schema, allrow, rowId, colId) \
   (data + (schema)->pFields[colId].offset * (allrow) + (rowId) * (schema)->pFields[colId].field.bytes)
@@ -172,7 +171,7 @@ int16_t tExtMemBufferPut(tExtMemBuffer *pMemBuffer, void *data, int32_t numOfRow
     pMemBuffer->numOfElemsInBuffer += numOfRows;
     pMemBuffer->numOfTotalElems += numOfRows;
   } else {
-    int32_t numOfRemainEntries = pMemBuffer->numOfElemsPerPage - pLast->item.num;
+    int32_t numOfRemainEntries = pMemBuffer->numOfElemsPerPage - (int32_t)pLast->item.num;
     tColModelAppend(pMemBuffer->pColumnModel, &pLast->item, data, 0, numOfRemainEntries, numOfRows);
 
     pMemBuffer->numOfElemsInBuffer += numOfRemainEntries;
@@ -270,7 +269,7 @@ int32_t tExtMemBufferFlush(tExtMemBuffer *pMemBuffer) {
       return ret;
     }
 
-    pMemBuffer->fileMeta.numOfElemsInFile += first->item.num;
+    pMemBuffer->fileMeta.numOfElemsInFile += (uint32_t)first->item.num;
     pMemBuffer->fileMeta.nFileSize += 1;
 
     tFilePagesItem *ptmp = first;
@@ -322,7 +321,7 @@ void tExtMemBufferClear(tExtMemBuffer *pMemBuffer) {
 }
 
 bool tExtMemBufferLoadData(tExtMemBuffer *pMemBuffer, tFilePage *pFilePage, int32_t flushoutId, int32_t pageIdx) {
-  if (flushoutId < 0 || flushoutId > pMemBuffer->fileMeta.flushoutData.nLength) {
+  if (flushoutId < 0 || flushoutId > (int32_t)pMemBuffer->fileMeta.flushoutData.nLength) {
     return false;
   }
 
@@ -344,8 +343,10 @@ static FORCE_INLINE int32_t primaryKeyComparator(int64_t f1, int64_t f2, int32_t
   if (f1 == f2) {
     return 0;
   }
-  
-  if (colIdx == 0 && tsOrder == TSDB_ORDER_DESC) {  // primary column desc order
+
+  assert(colIdx == 0);
+
+  if (tsOrder == TSDB_ORDER_DESC) {  // primary column desc order
     return (f1 < f2) ? 1 : -1;
   } else {  // asc
     return (f1 < f2) ? -1 : 1;
@@ -436,7 +437,7 @@ int32_t compare_a(tOrderDescriptor *pDescriptor, int32_t numOfRows1, int32_t s1,
 
   int32_t cmpCnt = pDescriptor->orderInfo.numOfCols;
   for (int32_t i = 0; i < cmpCnt; ++i) {
-    int32_t colIdx = pDescriptor->orderInfo.pData[i];
+    int32_t colIdx = pDescriptor->orderInfo.colIndex[i];
 
     char *f1 = COLMODEL_GET_VAL(data1, pDescriptor->pColumnModel, numOfRows1, s1, colIdx);
     char *f2 = COLMODEL_GET_VAL(data2, pDescriptor->pColumnModel, numOfRows2, s2, colIdx);
@@ -468,7 +469,7 @@ int32_t compare_d(tOrderDescriptor *pDescriptor, int32_t numOfRows1, int32_t s1,
 
   int32_t cmpCnt = pDescriptor->orderInfo.numOfCols;
   for (int32_t i = 0; i < cmpCnt; ++i) {
-    int32_t colIdx = pDescriptor->orderInfo.pData[i];
+    int32_t colIdx = pDescriptor->orderInfo.colIndex[i];
 
     char *f1 = COLMODEL_GET_VAL(data1, pDescriptor->pColumnModel, numOfRows1, s1, colIdx);
     char *f2 = COLMODEL_GET_VAL(data2, pDescriptor->pColumnModel, numOfRows2, s2, colIdx);
@@ -503,22 +504,22 @@ FORCE_INLINE int32_t compare_sd(tOrderDescriptor *pDescriptor, int32_t numOfRows
   return compare_d(pDescriptor, numOfRows, idx1, data, numOfRows, idx2, data);
 }
 
-static void swap(SColumnModel *pColumnModel, int32_t count, int32_t s1, char *data1, int32_t s2) {
+static void swap(SColumnModel *pColumnModel, int32_t count, int32_t s1, char *data1, int32_t s2, void* buf) {
   for (int32_t i = 0; i < pColumnModel->numOfCols; ++i) {
     void *first = COLMODEL_GET_VAL(data1, pColumnModel, count, s1, i);
     void *second = COLMODEL_GET_VAL(data1, pColumnModel, count, s2, i);
 
     SSchema* pSchema = &pColumnModel->pFields[i].field;
-    tsDataSwap(first, second, pSchema->type, pSchema->bytes);
+    tsDataSwap(first, second, pSchema->type, pSchema->bytes, buf);
   }
 }
 
 static void tColDataInsertSort(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t start, int32_t end, char *data,
-                               __col_compar_fn_t compareFn) {
+                               __col_compar_fn_t compareFn, void* buf) {
   for (int32_t i = start + 1; i <= end; ++i) {
     for (int32_t j = i; j > start; --j) {
       if (compareFn(pDescriptor, numOfRows, j, j - 1, data) == -1) {
-        swap(pDescriptor->pColumnModel, numOfRows, j - 1, data, j);
+        swap(pDescriptor->pColumnModel, numOfRows, j - 1, data, j, buf);
       } else {
         break;
       }
@@ -554,29 +555,30 @@ static void UNUSED_FUNC tSortDataPrint(int32_t type, char *prefix, char *startx,
 }
 
 static void median(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t start, int32_t end, char *data,
-                   __col_compar_fn_t compareFn) {
+                   __col_compar_fn_t compareFn, void* buf) {
   int32_t midIdx = ((end - start) >> 1) + start;
 
 #if defined(_DEBUG_VIEW)
-  int32_t f = pDescriptor->orderInfo.pData[0];
+  int32_t f = pDescriptor->orderInfo.colIndex[0];
 
   char *midx = COLMODEL_GET_VAL(data, pDescriptor->pColumnModel, numOfRows, midIdx, f);
   char *startx = COLMODEL_GET_VAL(data, pDescriptor->pColumnModel, numOfRows, start, f);
   char *endx = COLMODEL_GET_VAL(data, pDescriptor->pColumnModel, numOfRows, end, f);
 
-  int32_t colIdx = pDescriptor->orderInfo.pData[0];
+  int32_t colIdx = pDescriptor->orderInfo.colIndex[0];
   tSortDataPrint(pDescriptor->pColumnModel->pFields[colIdx].field.type, "before", startx, midx, endx);
 #endif
 
+  SColumnModel* pModel = pDescriptor->pColumnModel;
   if (compareFn(pDescriptor, numOfRows, midIdx, start, data) == 1) {
-    swap(pDescriptor->pColumnModel, numOfRows, start, data, midIdx);
+    swap(pModel, numOfRows, start, data, midIdx, buf);
   }
 
   if (compareFn(pDescriptor, numOfRows, midIdx, end, data) == 1) {
-    swap(pDescriptor->pColumnModel, numOfRows, midIdx, data, start);
-    swap(pDescriptor->pColumnModel, numOfRows, midIdx, data, end);
+    swap(pModel, numOfRows, midIdx, data, start, buf);
+    swap(pModel, numOfRows, midIdx, data, end, buf);
   } else if (compareFn(pDescriptor, numOfRows, start, end, data) == 1) {
-    swap(pDescriptor->pColumnModel, numOfRows, start, data, end);
+    swap(pModel, numOfRows, start, data, end, buf);
   }
 
   assert(compareFn(pDescriptor, numOfRows, midIdx, start, data) <= 0 &&
@@ -591,7 +593,7 @@ static void median(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t sta
 }
 
 static UNUSED_FUNC void tRowModelDisplay(tOrderDescriptor *pDescriptor, int32_t numOfRows, char *d, int32_t len) {
-  int32_t colIdx = pDescriptor->orderInfo.pData[0];
+  int32_t colIdx = pDescriptor->orderInfo.colIndex[0];
 
   for (int32_t i = 0; i < len; ++i) {
     char *startx = COLMODEL_GET_VAL(d, pDescriptor->pColumnModel, numOfRows, i, colIdx);
@@ -627,31 +629,19 @@ static UNUSED_FUNC void tRowModelDisplay(tOrderDescriptor *pDescriptor, int32_t 
   printf("\n");
 }
 
-static int32_t qsort_call = 0;
-
-void tColDataQSort(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t start, int32_t end, char *data,
-                   int32_t orderType) {
-  // short array sort, incur another sort procedure instead of quick sort process
-  __col_compar_fn_t compareFn = (orderType == TSDB_ORDER_ASC) ? compare_sa : compare_sd;
-
-  if (end - start + 1 <= 8) {
-    tColDataInsertSort(pDescriptor, numOfRows, start, end, data, compareFn);
-    return;
-  }
-
+static void columnwiseQSortImpl(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t start, int32_t end, char *data,
+                                int32_t orderType, __col_compar_fn_t compareFn, void* buf) {
 #ifdef _DEBUG_VIEW
-//  printf("before sort:\n");
-//  tRowModelDisplay(pDescriptor, numOfRows, data, end - start + 1);
+  printf("before sort:\n");
+  tRowModelDisplay(pDescriptor, numOfRows, data, end - start + 1);
 #endif
 
   int32_t s = start, e = end;
-  median(pDescriptor, numOfRows, start, end, data, compareFn);
+  median(pDescriptor, numOfRows, start, end, data, compareFn, buf);
 
 #ifdef _DEBUG_VIEW
-//  printf("%s called: %d\n", __FUNCTION__, qsort_call++);
+  //  printf("%s called: %d\n", __FUNCTION__, qsort_call++);
 #endif
-
-  UNUSED(qsort_call);
 
   int32_t end_same = end;
   int32_t start_same = start;
@@ -664,17 +654,17 @@ void tColDataQSort(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t sta
       }
 
       if (ret == 0 && e != end_same) {
-        swap(pDescriptor->pColumnModel, numOfRows, e, data, end_same--);
+        swap(pDescriptor->pColumnModel, numOfRows, e, data, end_same--, buf);
       }
       e--;
     }
 
     if (e != s) {
-      swap(pDescriptor->pColumnModel, numOfRows, s, data, e);
+      swap(pDescriptor->pColumnModel, numOfRows, s, data, e, buf);
     }
 
 #ifdef _DEBUG_VIEW
-//    tRowModelDisplay(pDescriptor, numOfRows, data, end - start + 1);
+    //    tRowModelDisplay(pDescriptor, numOfRows, data, end - start + 1);
 #endif
 
     while (s < e) {
@@ -684,16 +674,16 @@ void tColDataQSort(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t sta
       }
 
       if (ret == 0 && s != start_same) {
-        swap(pDescriptor->pColumnModel, numOfRows, s, data, start_same++);
+        swap(pDescriptor->pColumnModel, numOfRows, s, data, start_same++, buf);
       }
       s++;
     }
 
     if (s != e) {
-      swap(pDescriptor->pColumnModel, numOfRows, s, data, e);
+      swap(pDescriptor->pColumnModel, numOfRows, s, data, e, buf);
     }
 #ifdef _DEBUG_VIEW
-//    tRowModelDisplay(pDescriptor, numOfRows, data, end - start + 1);
+    //    tRowModelDisplay(pDescriptor, numOfRows, data, end - start + 1);
 #endif
   }
 
@@ -703,14 +693,14 @@ void tColDataQSort(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t sta
     int32_t right = end;
 
     while (right > end_same && left <= end_same) {
-      swap(pDescriptor->pColumnModel, numOfRows, left++, data, right--);
+      swap(pDescriptor->pColumnModel, numOfRows, left++, data, right--, buf);
     }
 
     // (pivotal+1) + steps of number that are identical pivotal
     rightx += (end - end_same);
 
 #ifdef _DEBUG_VIEW
-//    tRowModelDisplay(pDescriptor, numOfRows, data, end - start + 1);
+    //    tRowModelDisplay(pDescriptor, numOfRows, data, end - start + 1);
 #endif
   }
 
@@ -720,24 +710,50 @@ void tColDataQSort(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t sta
     int32_t right = e - 1;
 
     while (left < start_same && right >= start_same) {
-      swap(pDescriptor->pColumnModel, numOfRows, left++, data, right--);
+      swap(pDescriptor->pColumnModel, numOfRows, left++, data, right--, buf);
     }
 
     // (pivotal-1) - steps of number that are identical pivotal
     leftx -= (start_same - start);
 
 #ifdef _DEBUG_VIEW
-//    tRowModelDisplay(pDescriptor, numOfRows, data, end - start + 1);
+    //    tRowModelDisplay(pDescriptor, numOfRows, data, end - start + 1);
 #endif
   }
 
   if (leftx > start) {
-    tColDataQSort(pDescriptor, numOfRows, start, leftx, data, orderType);
+    columnwiseQSortImpl(pDescriptor, numOfRows, start, leftx, data, orderType, compareFn, buf);
   }
 
   if (rightx < end) {
-    tColDataQSort(pDescriptor, numOfRows, rightx, end, data, orderType);
+    columnwiseQSortImpl(pDescriptor, numOfRows, rightx, end, data, orderType, compareFn, buf);
   }
+}
+
+void tColDataQSort(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t start, int32_t end, char *data, int32_t order) {
+  // short array sort, incur another sort procedure instead of quick sort process
+  __col_compar_fn_t compareFn = (order == TSDB_ORDER_ASC) ? compare_sa : compare_sd;
+
+  SColumnModel* pModel = pDescriptor->pColumnModel;
+
+  size_t width = 0;
+  for(int32_t i = 0; i < pModel->numOfCols; ++i) {
+    SSchema* pSchema = &pModel->pFields[i].field;
+    if (width < pSchema->bytes) {
+      width = pSchema->bytes;
+    }
+  }
+
+  char* buf = malloc(width);
+  assert(width > 0 && buf != NULL);
+
+  if (end - start + 1 <= 8) {
+    tColDataInsertSort(pDescriptor, numOfRows, start, end, data, compareFn, buf);
+  } else {
+    columnwiseQSortImpl(pDescriptor, numOfRows, start, end, data, order, compareFn, buf);
+  }
+
+  free(buf);
 }
 
 /*
@@ -991,7 +1007,7 @@ void tColModelCompact(SColumnModel *pModel, tFilePage *inputBuffer, int32_t maxE
     SSchemaEx* pSchemaEx = &pModel->pFields[i];
     memmove(inputBuffer->data + pSchemaEx->offset * inputBuffer->num,
             inputBuffer->data + pSchemaEx->offset * maxElemsCapacity,
-            pSchemaEx->field.bytes * inputBuffer->num);
+            (size_t)(pSchemaEx->field.bytes * inputBuffer->num));
   }
 }
 
@@ -1011,8 +1027,8 @@ void tColModelErase(SColumnModel *pModel, tFilePage *inputBuffer, int32_t blockC
   }
 
   int32_t removed = e - s + 1;
-  int32_t remain = inputBuffer->num - removed;
-  int32_t secPart = inputBuffer->num - e - 1;
+  int32_t remain = (int32_t)inputBuffer->num - removed;
+  int32_t secPart = (int32_t)inputBuffer->num - e - 1;
 
   /* start from the second column */
   for (int32_t i = 0; i < pModel->numOfCols; ++i) {
@@ -1061,7 +1077,7 @@ tOrderDescriptor *tOrderDesCreate(const int32_t *orderColIdx, int32_t numOfOrder
 
   desc->orderInfo.numOfCols = numOfOrderCols;
   for (int32_t i = 0; i < numOfOrderCols; ++i) {
-    desc->orderInfo.pData[i] = orderColIdx[i];
+    desc->orderInfo.colIndex[i] = orderColIdx[i];
   }
 
   return desc;

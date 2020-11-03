@@ -29,7 +29,7 @@ extern "C" {
 
 #define MAX_TMPFILE_PATH_LENGTH        PATH_MAX
 #define INITIAL_ALLOCATION_BUFFER_SIZE 64
-#define DEFAULT_PAGE_SIZE              (4096L)  // 16k larger than the SHistoInfo
+#define DEFAULT_PAGE_SIZE              (1024L)  // 16k larger than the SHistoInfo
 
 typedef enum EXT_BUFFER_FLUSH_MODEL {
   /*
@@ -89,7 +89,7 @@ typedef struct SColumnModel {
 
 typedef struct SColumnOrderInfo {
   int32_t numOfCols;
-  int16_t pData[];
+  int16_t colIndex[];
 } SColumnOrderInfo;
 
 typedef struct tOrderDescriptor {

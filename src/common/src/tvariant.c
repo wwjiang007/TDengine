@@ -12,11 +12,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
+#include "os.h"
 
 #include "tvariant.h"
-#include "hash.h"
-#include "hashfunc.h"
-#include "os.h"
 #include "hash.h"
 #include "taos.h"
 #include "taosdef.h"
@@ -25,7 +23,7 @@
 #include "tutil.h"
 
 // todo support scientific expression number and oct number
-void tVariantCreate(tVariant *pVar, SSQLToken *token) { tVariantCreateFromString(pVar, token->z, token->n, token->type); }
+void tVariantCreate(tVariant *pVar, SStrToken *token) { tVariantCreateFromString(pVar, token->z, token->n, token->type); }
 
 void tVariantCreateFromString(tVariant *pVar, char *pz, uint32_t len, uint32_t type) {
   memset(pVar, 0, sizeof(tVariant));
@@ -101,19 +99,18 @@ void tVariantCreateFromBinary(tVariant *pVar, const char *pz, size_t len, uint32
       break;
     }
     case TSDB_DATA_TYPE_NCHAR: { // here we get the nchar length from raw binary bits length
-      int32_t lenInwchar = len / TSDB_NCHAR_SIZE;
+      size_t lenInwchar = len / TSDB_NCHAR_SIZE;
+
       pVar->wpz = calloc(1, (lenInwchar + 1) * TSDB_NCHAR_SIZE);
-      
-      wcsncpy(pVar->wpz, (wchar_t *)pz, lenInwchar);
-      pVar->wpz[lenInwchar] = 0;
-      pVar->nLen = len;
+      memcpy(pVar->wpz, pz, lenInwchar * TSDB_NCHAR_SIZE);
+      pVar->nLen = (int32_t)len;
       
       break;
     }
     case TSDB_DATA_TYPE_BINARY: {  // todo refactor, extract a method
       pVar->pz = calloc(len, sizeof(char));
       memcpy(pVar->pz, pz, len);
-      pVar->nLen = len;
+      pVar->nLen = (int32_t)len;
       break;
     }
     
@@ -169,6 +166,50 @@ void tVariantAssign(tVariant *pDst, const tVariant *pSrc) {
       char* n = strdup(p);
       taosArrayPush(pDst->arr, &n);
     }
+
+    return;
+  }
+
+  pDst->nLen = tDataTypeDesc[pDst->nType].nSize;
+}
+
+int32_t tVariantCompare(const tVariant* p1, const tVariant* p2) {
+  if (p1->nType == TSDB_DATA_TYPE_NULL && p2->nType == TSDB_DATA_TYPE_NULL) {
+    return 0;
+  }
+
+  if (p1->nType == TSDB_DATA_TYPE_NULL) {
+    return -1;
+  }
+
+  if (p2->nType == TSDB_DATA_TYPE_NULL) {
+    return 1;
+  }
+
+  switch (p1->nType) {
+    case TSDB_DATA_TYPE_BINARY:
+    case TSDB_DATA_TYPE_NCHAR: {
+      if (p1->nLen == p2->nLen) {
+        return memcmp(p1->pz, p2->pz, p1->nLen);
+      } else {
+        return p1->nLen > p2->nLen? 1:-1;
+      }
+    };
+
+    case TSDB_DATA_TYPE_FLOAT:
+    case TSDB_DATA_TYPE_DOUBLE:
+      if (p1->dKey == p2->dKey) {
+        return 0;
+      } else {
+        return p1->dKey > p2->dKey? 1:-1;
+      }
+
+    default:
+      if (p1->i64Key == p2->i64Key) {
+        return 0;
+      } else {
+        return p1->i64Key > p2->i64Key? 1:-1;
+      }
   }
 }
 
@@ -185,7 +226,7 @@ int32_t tVariantToString(tVariant *pVar, char *dst) {
     case TSDB_DATA_TYPE_NCHAR: {
       dst[0] = '\'';
       taosUcs4ToMbs(pVar->wpz, (twcslen(pVar->wpz) + 1) * TSDB_NCHAR_SIZE, dst + 1);
-      int32_t len = strlen(dst);
+      int32_t len = (int32_t)strlen(dst);
       dst[len] = '\'';
       dst[len + 1] = 0;
       return len + 1;
@@ -228,7 +269,7 @@ static int32_t doConvertToInteger(tVariant *pVariant, char *pDest, int32_t type,
     errno = 0;
     char *endPtr = NULL;
 
-    SSQLToken token = {0};
+    SStrToken token = {0};
     token.n = tSQLGetToken(pVariant->pz, &token.type);
 
     if (token.type == TK_MINUS || token.type == TK_PLUS) {
@@ -277,7 +318,7 @@ static int32_t doConvertToInteger(tVariant *pVariant, char *pDest, int32_t type,
     errno = 0;
     wchar_t *endPtr = NULL;
 
-    SSQLToken token = {0};
+    SStrToken token = {0};
     token.n = tSQLGetToken(pVariant->pz, &token.type);
 
     if (token.type == TK_MINUS || token.type == TK_PLUS) {
@@ -361,11 +402,11 @@ static int32_t toBinary(tVariant *pVariant, char **pDest, int32_t *pDestSize) {
         pBuf = realloc(pBuf, newSize + 1);
       }
       
-      taosUcs4ToMbs(pVariant->wpz, newSize, pBuf);
+      taosUcs4ToMbs(pVariant->wpz, (int32_t)newSize, pBuf);
       free(pVariant->wpz);
       pBuf[newSize] = 0;
     } else {
-      taosUcs4ToMbs(pVariant->wpz, newSize, *pDest);
+      taosUcs4ToMbs(pVariant->wpz, (int32_t)newSize, *pDest);
     }
     
   } else {
@@ -384,7 +425,7 @@ static int32_t toBinary(tVariant *pVariant, char **pDest, int32_t *pDestSize) {
     *pDest = pBuf;
   }
   
-  *pDestSize = strlen(*pDest);
+  *pDestSize = (int32_t)strlen(*pDest);
   return 0;
 }
 
@@ -428,7 +469,7 @@ static int32_t toNchar(tVariant *pVariant, char **pDest, int32_t *pDestSize) {
     taosMbsToUcs4(pDst, nLen, *pDest, (nLen + 1) * TSDB_NCHAR_SIZE, &output);
     
     if (pDestSize != NULL) {
-      *pDestSize = output;
+      *pDestSize = (int32_t)output;
     }
   }
   
@@ -436,7 +477,7 @@ static int32_t toNchar(tVariant *pVariant, char **pDest, int32_t *pDestSize) {
 }
 
 static FORCE_INLINE int32_t convertToDouble(char *pStr, int32_t len, double *value) {
-  SSQLToken stoken = {.z = pStr, .n = len};
+  SStrToken stoken = {.z = pStr, .n = len};
   
   if (TK_ILLEGAL == isValidNumber(&stoken)) {
     return -1;
@@ -462,7 +503,7 @@ static FORCE_INLINE int32_t convertToInteger(tVariant *pVariant, int64_t *result
     errno = 0;
     char *endPtr = NULL;
     
-    SSQLToken token = {0};
+    SStrToken token = {0};
     token.n = tSQLGetToken(pVariant->pz, &token.type);
     
     if (token.type == TK_MINUS || token.type == TK_PLUS) {
@@ -479,7 +520,7 @@ static FORCE_INLINE int32_t convertToInteger(tVariant *pVariant, int64_t *result
       return 0;
     }
     
-    SSQLToken sToken = {.z = pVariant->pz, .n = pVariant->nLen};
+    SStrToken sToken = {.z = pVariant->pz, .n = pVariant->nLen};
     if (TK_ILLEGAL == isValidNumber(&sToken)) {
       return -1;
     }
@@ -515,7 +556,7 @@ static FORCE_INLINE int32_t convertToInteger(tVariant *pVariant, int64_t *result
     errno = 0;
     wchar_t *endPtr = NULL;
     
-    SSQLToken token = {0};
+    SStrToken token = {0};
     token.n = tSQLGetToken(pVariant->pz, &token.type);
     
     if (token.type == TK_MINUS || token.type == TK_PLUS) {
@@ -668,46 +709,21 @@ int32_t tVariantDump(tVariant *pVariant, char *payload, int16_t type, bool inclu
             return -1;
           }
 
-#ifdef _TD_ARM_32_
-          //memcpy(&payload, &value, sizeof(float));
-          float fv = (float)value;
-          SET_FLOAT_VAL_ALIGN(payload, &fv);
-#else
-          *((float *)payload) = (float)value;
-#endif
+          SET_FLOAT_VAL(payload, value);
         }
       } else if (pVariant->nType >= TSDB_DATA_TYPE_BOOL && pVariant->nType <= TSDB_DATA_TYPE_BIGINT) {
-#ifdef _TD_ARM_32_
-        //memcpy(&payload, &pVariant->i64Key, sizeof(float));
-        float fv = (float)pVariant->i64Key;
-        SET_FLOAT_VAL_ALIGN(payload, &fv);
-#else
-        *((float *)payload) = pVariant->i64Key;
-#endif
+        SET_FLOAT_VAL(payload, pVariant->i64Key);
       } else if (pVariant->nType == TSDB_DATA_TYPE_DOUBLE || pVariant->nType == TSDB_DATA_TYPE_FLOAT) {
-#ifdef _TD_ARM_32_
-        //memcpy(&payload, &pVariant->dKey, sizeof(float));
-        float fv = (float)pVariant->dKey;
-        SET_FLOAT_VAL_ALIGN(payload, &fv);
-#else
-        *((float *)payload) = (float)pVariant->dKey;
-#endif
+        SET_FLOAT_VAL(payload, pVariant->dKey);
       } else if (pVariant->nType == TSDB_DATA_TYPE_NULL) {
         *((int32_t *)payload) = TSDB_DATA_FLOAT_NULL;
         return 0;
       }
 
-#ifdef _TD_ARM_32_
       float fv = GET_FLOAT_VAL(payload);
       if (isinf(fv) || isnan(fv) || fv > FLT_MAX || fv < -FLT_MAX) {
         return -1;
       }
-#else
-      if (isinf(*((float *)payload)) || isnan(*((float *)payload)) || *((float *)payload) > FLT_MAX ||
-          *((float *)payload) < -FLT_MAX) {
-        return -1;
-      }
-#endif
       break;
     }
     case TSDB_DATA_TYPE_DOUBLE: {
@@ -724,42 +740,21 @@ int32_t tVariantDump(tVariant *pVariant, char *payload, int16_t type, bool inclu
             return -1;
           }
 
-#ifdef _TD_ARM_32_
-          SET_DOUBLE_VAL_ALIGN(payload, &value);
-#else
-          *((double *)payload) = value;
-#endif
+          SET_DOUBLE_VAL(payload, value);
         }
       } else if (pVariant->nType >= TSDB_DATA_TYPE_BOOL && pVariant->nType <= TSDB_DATA_TYPE_BIGINT) {
-#ifdef _TD_ARM_32_
-        double dv = (double)(pVariant->i64Key);
-        SET_DOUBLE_VAL_ALIGN(payload, &dv);
-#else
-        *((double *)payload) = pVariant->i64Key;
-#endif
+        SET_DOUBLE_VAL(payload, pVariant->i64Key);
       } else if (pVariant->nType == TSDB_DATA_TYPE_DOUBLE || pVariant->nType == TSDB_DATA_TYPE_FLOAT) {
-#ifdef _TD_ARM_32_
-        double dv = (double)(pVariant->dKey);
-        SET_DOUBLE_VAL_ALIGN(payload, &dv);
-#else
-        *((double *)payload) = pVariant->dKey;
-#endif
+        SET_DOUBLE_VAL(payload, pVariant->dKey);
       } else if (pVariant->nType == TSDB_DATA_TYPE_NULL) {
         *((int64_t *)payload) = TSDB_DATA_DOUBLE_NULL;
         return 0;
       }
 
-#ifdef _TD_ARM_32_
       double dv = GET_DOUBLE_VAL(payload);
       if (isinf(dv) || isnan(dv) || dv > DBL_MAX || dv < -DBL_MAX) {
         return -1;
       }
-#else
-      if (isinf(*((double *)payload)) || isnan(*((double *)payload)) || *((double *)payload) > DBL_MAX ||
-          *((double *)payload) < -DBL_MAX) {
-        return -1;
-      }
-#endif
       break;
     }
     

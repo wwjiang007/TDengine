@@ -15,6 +15,7 @@
 #ifndef _TD_TSDB_MAIN_H_
 #define _TD_TSDB_MAIN_H_
 
+#include "os.h"
 #include "hash.h"
 #include "tcoding.h"
 #include "tglobal.h"
@@ -44,6 +45,8 @@ extern int tsdbDebugFlag;
 #define TSDB_FILE_DELIMITER 0xF00AFA0F
 #define TSDB_FILE_INIT_MAGIC 0xFFFFFFFF
 
+#define TAOS_IN_RANGE(key, keyMin, keyLast) (((key) >= (keyMin)) && ((key) <= (keyMax)))
+
 // NOTE: Any file format change must increase this version number by 1
 //       Also, implement the convert function
 #define TSDB_FILE_VERSION ((uint32_t)0)
@@ -67,7 +70,7 @@ typedef struct STable {
   char*          sql;
   void*          cqhandle;
   SRWLatch       latch;  // TODO: implementa latch functions
-  T_REF_DECLARE();
+  T_REF_DECLARE()
 } STable;
 
 typedef struct {
@@ -115,7 +118,7 @@ typedef struct {
 } STableData;
 
 typedef struct {
-  T_REF_DECLARE();
+  T_REF_DECLARE()
   SRWLatch     latch;
   TSKEY        keyFirst;
   TSKEY        keyLast;
@@ -123,14 +126,24 @@ typedef struct {
   int32_t      maxTables;
   STableData** tData;
   SList*       actList;
+  SList*       extraBuffList;
   SList*       bufBlockList;
 } SMemTable;
 
 enum { TSDB_UPDATE_META, TSDB_DROP_META };
+
+#ifdef WINDOWS
+#pragma pack(push ,1) 
+typedef struct {
+#else
 typedef struct __attribute__((packed)){
+#endif
   char     act;
   uint64_t uid;
 } SActObj;
+#ifdef WINDOWS
+#pragma pack(pop) 
+#endif
 
 typedef struct {
   int  len;
@@ -140,21 +153,21 @@ typedef struct {
 // ------------------ tsdbFile.c
 extern const char* tsdbFileSuffix[];
 typedef enum {
-#ifdef TSDB_IDX
-  TSDB_FILE_TYPE_IDX = 0,
-  TSDB_FILE_TYPE_HEAD,
-#else
   TSDB_FILE_TYPE_HEAD = 0,
-#endif
   TSDB_FILE_TYPE_DATA,
   TSDB_FILE_TYPE_LAST,
-  TSDB_FILE_TYPE_MAX,
-#ifdef TSDB_IDX
-  TSDB_FILE_TYPE_NIDX,
-#endif
+  TSDB_FILE_TYPE_STAT,
   TSDB_FILE_TYPE_NHEAD,
-  TSDB_FILE_TYPE_NLAST
+  TSDB_FILE_TYPE_NDATA,
+  TSDB_FILE_TYPE_NLAST,
+  TSDB_FILE_TYPE_NSTAT
 } TSDB_FILE_TYPE;
+
+#ifndef TDINTERNAL
+#define TSDB_FILE_TYPE_MAX (TSDB_FILE_TYPE_LAST+1)
+#else
+#define TSDB_FILE_TYPE_MAX (TSDB_FILE_TYPE_STAT+1)
+#endif
 
 typedef struct {
   uint32_t magic;
@@ -175,6 +188,7 @@ typedef struct {
 
 typedef struct {
   int   fileId;
+  int   state; // 0 for health, 1 for problem
   SFile files[TSDB_FILE_TYPE_MAX];
 } SFileGroup;
 
@@ -270,9 +284,6 @@ typedef struct {
   TSKEY      minKey;
   TSKEY      maxKey;
   SFileGroup fGroup;
-#ifdef TSDB_IDX
-  SFile nIdxF;
-#endif
   SFile      nHeadF;
   SFile      nLastF;
 } SHelperFile;
@@ -308,6 +319,16 @@ typedef struct {
   void*      pBuffer;     // Buffer to hold the whole data block
   void*      compBuffer;  // Buffer for temperary compress/decompress purpose
 } SRWHelper;
+
+// ------------------ tsdbScan.c
+typedef struct {
+  SFileGroup fGroup;
+  int        numOfIdx;
+  SCompIdx*  pCompIdx;
+  SCompInfo* pCompInfo;
+  void*      pBuf;
+  FILE*      tLogStream;
+} STsdbScanHandle;
 
 // Operations
 // ------------------ tsdbMeta.c
@@ -392,6 +413,8 @@ static FORCE_INLINE STSchema *tsdbGetTableTagSchema(STable *pTable) {
 }
 
 // ------------------ tsdbBuffer.c
+#define TSDB_BUFFER_RESERVE 1024  // Reseve 1K as commit threshold
+
 STsdbBufPool* tsdbNewBufPool();
 void          tsdbFreeBufPool(STsdbBufPool* pBufPool);
 int           tsdbOpenBufPool(STsdbRepo* pRepo);
@@ -415,7 +438,7 @@ static FORCE_INLINE SDataRow tsdbNextIterRow(SSkipListIterator* pIter) {
   SSkipListNode* node = tSkipListIterGet(pIter);
   if (node == NULL) return NULL;
 
-  return SL_GET_NODE_DATA(node);
+  return *(SDataRow *)SL_GET_NODE_DATA(node);
 }
 
 static FORCE_INLINE TSKEY tsdbNextIterKey(SSkipListIterator* pIter) {
@@ -423,6 +446,19 @@ static FORCE_INLINE TSKEY tsdbNextIterKey(SSkipListIterator* pIter) {
   if (row == NULL) return -1;
 
   return dataRowKey(row);
+}
+
+static FORCE_INLINE STsdbBufBlock* tsdbGetCurrBufBlock(STsdbRepo* pRepo) {
+  ASSERT(pRepo != NULL);
+  if (pRepo->mem == NULL) return NULL;
+
+  SListNode* pNode = listTail(pRepo->mem->bufBlockList);
+  if (pNode == NULL) return NULL;
+
+  STsdbBufBlock* pBufBlock = NULL;
+  tdListNodeGetData(pRepo->mem->bufBlockList, pNode, (void*)(&pBufBlock));
+
+  return pBufBlock;
 }
 
 // ------------------ tsdbFile.c
@@ -451,6 +487,8 @@ int         tsdbUpdateFileHeader(SFile* pFile);
 int         tsdbEncodeSFileInfo(void** buf, const STsdbFileInfo* pInfo);
 void*       tsdbDecodeSFileInfo(void* buf, STsdbFileInfo* pInfo);
 void        tsdbRemoveFileGroup(STsdbRepo* pRepo, SFileGroup* pFGroup);
+int         tsdbLoadFileHeader(SFile* pFile, uint32_t* version);
+void        tsdbGetFileInfoImpl(char* fname, uint32_t* magic, int64_t* size);
 void        tsdbGetFidKeyRange(int daysPerFile, int8_t precision, int fileId, TSKEY *minKey, TSKEY *maxKey);
 
 // ------------------ tsdbRWHelper.c
@@ -471,10 +509,6 @@ void        tsdbGetFidKeyRange(int daysPerFile, int8_t precision, int fileId, TS
 #define helperState(h) (h)->state
 #define TSDB_NLAST_FILE_OPENED(h) ((h)->files.nLastF.fd > 0)
 #define helperFileId(h) ((h)->files.fGroup.fileId)
-#ifdef TSDB_IDX
-#define helperIdxF(h) (&((h)->files.fGroup.files[TSDB_FILE_TYPE_IDX]))
-#define helperNewIdxF(h) (&((h)->files.nIdxF))
-#endif
 #define helperHeadF(h) (&((h)->files.fGroup.files[TSDB_FILE_TYPE_HEAD]))
 #define helperDataF(h) (&((h)->files.fGroup.files[TSDB_FILE_TYPE_DATA]))
 #define helperLastF(h) (&((h)->files.fGroup.files[TSDB_FILE_TYPE_LAST]))
@@ -486,13 +520,16 @@ int  tsdbInitWriteHelper(SRWHelper* pHelper, STsdbRepo* pRepo);
 void tsdbDestroyHelper(SRWHelper* pHelper);
 void tsdbResetHelper(SRWHelper* pHelper);
 int  tsdbSetAndOpenHelperFile(SRWHelper* pHelper, SFileGroup* pGroup);
-int  tsdbCloseHelperFile(SRWHelper* pHelper, bool hasError);
+int  tsdbCloseHelperFile(SRWHelper* pHelper, bool hasError, SFileGroup* pGroup);
 int  tsdbSetHelperTable(SRWHelper* pHelper, STable* pTable, STsdbRepo* pRepo);
 int  tsdbCommitTableData(SRWHelper* pHelper, SCommitIter* pCommitIter, SDataCols* pDataCols, TSKEY maxKey);
 int  tsdbMoveLastBlockIfNeccessary(SRWHelper* pHelper);
 int  tsdbWriteCompInfo(SRWHelper* pHelper);
 int  tsdbWriteCompIdx(SRWHelper* pHelper);
+int  tsdbLoadCompIdxImpl(SFile* pFile, uint32_t offset, uint32_t len, void* buffer);
+int  tsdbDecodeSCompIdxImpl(void* buffer, uint32_t len, SCompIdx** ppCompIdx, int* numOfIdx);
 int  tsdbLoadCompIdx(SRWHelper* pHelper, void* target);
+int  tsdbLoadCompInfoImpl(SFile* pFile, SCompIdx* pIdx, SCompInfo** ppCompInfo);
 int  tsdbLoadCompInfo(SRWHelper* pHelper, void* target);
 int  tsdbLoadCompData(SRWHelper* phelper, SCompBlock* pcompblock, void* target);
 void tsdbGetDataStatis(SRWHelper* pHelper, SDataStatis* pStatis, int numOfCols);
@@ -516,13 +553,24 @@ static FORCE_INLINE int compTSKEY(const void* key1, const void* key2) {
 #define TSDB_SUBMIT_MSG_HEAD_SIZE sizeof(SSubmitMsg)
 
 char*       tsdbGetMetaFileName(char* rootDir);
-void        tsdbGetDataFileName(STsdbRepo* pRepo, int fid, int type, char* fname);
+void        tsdbGetDataFileName(char* rootDir, int vid, int fid, int type, char* fname);
 int         tsdbLockRepo(STsdbRepo* pRepo);
 int         tsdbUnlockRepo(STsdbRepo* pRepo);
 char*       tsdbGetDataDirName(char* rootDir);
 int         tsdbGetNextMaxTables(int tid);
 STsdbMeta*  tsdbGetMeta(TSDB_REPO_T* pRepo);
 STsdbFileH* tsdbGetFile(TSDB_REPO_T* pRepo);
+int         tsdbCheckCommit(STsdbRepo* pRepo);
+
+// ------------------ tsdbScan.c
+int              tsdbScanFGroup(STsdbScanHandle* pScanHandle, char* rootDir, int fid);
+STsdbScanHandle* tsdbNewScanHandle();
+void             tsdbSetScanLogStream(STsdbScanHandle* pScanHandle, FILE* fLogStream);
+int              tsdbSetAndOpenScanFile(STsdbScanHandle* pScanHandle, char* rootDir, int fid);
+int              tsdbScanSCompIdx(STsdbScanHandle* pScanHandle);
+int              tsdbScanSCompBlock(STsdbScanHandle* pScanHandle, int idx);
+int              tsdbCloseScanFile(STsdbScanHandle* pScanHandle);
+void             tsdbFreeScanHandle(STsdbScanHandle* pScanHandle);
 
 #ifdef __cplusplus
 }

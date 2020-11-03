@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2019 TAOS Data, Inc. <jhtao@taosdata.com>
  *
  * This program is free software: you can use, redistribute, and/or modify
@@ -15,24 +15,31 @@
 
 #define _GNU_SOURCE
 
-#include <argp.h>
-#include <assert.h>
-#include <inttypes.h>
-
-#ifndef _ALPINE
-#include <error.h>
-#endif
-#include <pthread.h>
-#include <semaphore.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/time.h>
-#include <time.h>
-#include <unistd.h>
-#include <wordexp.h>
-#include <regex.h>
+#ifdef LINUX
+  #include "os.h"
+  #include <argp.h>
+  #include <assert.h>
+  #include <inttypes.h>
+  #ifndef _ALPINE
+    #include <error.h>
+  #endif
+  #include <pthread.h>
+  #include <semaphore.h>
+  #include <stdbool.h>
+  #include <stdio.h>
+  #include <stdlib.h>
+  #include <string.h>
+  #include <sys/time.h>
+  #include <time.h>
+  #include <unistd.h>
+  #include <wordexp.h>
+  #include <regex.h>
+#else  
+  #include <assert.h>
+  #include <regex.h>
+  #include <stdio.h>
+  #include "os.h"
+#endif  
 
 #include "taos.h"
 #include "tutil.h"
@@ -42,200 +49,402 @@ extern char configDir[];
 #define BUFFER_SIZE      65536
 #define MAX_DB_NAME_SIZE 64
 #define MAX_TB_NAME_SIZE 64
-#define MAX_DATA_SIZE    1024
-#define MAX_NUM_DATATYPE 8
+#define MAX_DATA_SIZE    16000
+#define MAX_NUM_DATATYPE 10
 #define OPT_ABORT        1 /* –abort */
-#define STRING_LEN       512
-
-/* The options we understand. */
-static struct argp_option options[] = {
-  {0, 'h', "host",                     0, "The host to connect to TDEngine. Default is localhost.",                                                           0},
-  {0, 'p', "port",                     0, "The TCP/IP port number to use for the connection. Default is 0.",                                                  1},
-  {0, 'u', "user",                     0, "The TDEngine user name to use when connecting to the server. Default is 'root'.",                                  2},
-  {0, 'P', "password",                 0, "The password to use when connecting to the server. Default is 'taosdata'.",                                        3},
-  {0, 'd', "database",                 0, "Destination database. Default is 'test'.",                                                                         3},
-  {0, 'm', "table_prefix",             0, "Table prefix name. Default is 't'.",                                                                               3},
-  {0, 's', "sql file",                 0, "The select sql file.",                                                                                             3},
-  {0, 'M', 0,                          0, "Use metric flag.",                                                                                                 13},
-  {0, 'o', "outputfile",               0, "Direct output to the named file. Default is './output.txt'.",                                                      14},
-  {0, 'q', "query_mode",               0, "Query mode--0: SYNC, 1: ASYNC. Default is SYNC.",                                                                  6},
-  {0, 'b', "type_of_cols",             0, "The data_type of columns: 'INT', 'TINYINT', 'SMALLINT', 'BIGINT', 'FLOAT', 'DOUBLE', 'BINARY'. Default is 'INT'.", 7},
-  {0, 'w', "length_of_binary",         0, "The length of data_type 'BINARY'. Only applicable when type of cols is 'BINARY'. Default is 8",                    8},
-  {0, 'l', "num_of_cols_per_record",   0, "The number of columns per record. Default is 3.",                                                                  8},
-  {0, 'T', "num_of_threads",           0, "The number of threads. Default is 10.",                                                                            9},
-  {0, 'r', "num_of_records_per_req",   0, "The number of records per request. Default is 1000.",                                                              10},
-  {0, 't', "num_of_tables",            0, "The number of tables. Default is 10000.",                                                                          11},
-  {0, 'n', "num_of_records_per_table", 0, "The number of records per table. Default is 100000.",                                                              12},
-  {0, 'c', "config_directory",         0, "Configuration directory. Default is '/etc/taos/'.",                                                                14},
-  {0, 'x', 0,                          0, "Insert only flag.",                                                                                                13},
-  {0, 'O', "order",                    0, "Insert mode--0: In order, 1: Out of order. Default is in order.",                                                  14},
-  {0, 'R', "rate",                     0, "Out of order data's rate--if order=1 Default 10, min: 0, max: 50.",                                                14},
-  {0, 'D', "delete table",             0, "Delete data methods——0: don't delete, 1: delete by table, 2: delete by stable, 3: delete by database",             14},
-  {0}};
+#define STRING_LEN       60000
+#define MAX_PREPARED_RAND 1000000
 
 /* Used by main to communicate with parse_opt. */
 typedef struct DemoArguments {
-  char  *host;
-  uint16_t    port;
-  char  *user;
-  char  *password;
-  char  *database;
-  char  *tb_prefix;
-  char  *sqlFile;
-  bool   use_metric;
-  bool   insert_only;
-  char  *output_file;
-  int    mode;
-  char  *datatype[MAX_NUM_DATATYPE+1];
-  int    len_of_binary;
-  int    num_of_CPR;
-  int    num_of_threads;
-  int    num_of_RPR;
-  int    num_of_tables;
-  int    num_of_DPT;
-  int    abort;
-  int    order;
-  int    rate;
-  int    method_of_delete;
-  char **arg_list;
+  char *   host;
+  uint16_t port;
+  char *   user;
+  char *   password;
+  char *   database;
+  int      replica;
+  char *   tb_prefix;
+  char *   sqlFile;
+  bool     use_metric;
+  bool     insert_only;
+  char *   output_file;
+  int      mode;
+  char *   datatype[MAX_NUM_DATATYPE + 1];
+  int      len_of_binary;
+  int      num_of_CPR;
+  int      num_of_threads;
+  int      num_of_RPR;
+  int      num_of_tables;
+  int      num_of_DPT;
+  int      abort;
+  int      order;
+  int      rate;
+  int      method_of_delete;
+  char **  arg_list;
 } SDemoArguments;
 
-/* Parse a single option. */
-static error_t parse_opt(int key, char *arg, struct argp_state *state) {
-  /* Get the input argument from argp_parse, which we
-     know is a pointer to our arguments structure. */
-  SDemoArguments *arguments = state->input;
-  wordexp_t full_path;
-  char **sptr;
-  switch (key) {
-    case 'h':
-      arguments->host = arg;
-      break;
-    case 'p':
-      arguments->port = atoi(arg);
-      break;
-    case 'u':
-      arguments->user = arg;
-      break;
-    case 'P':
-      arguments->password = arg;
-      break;
-    case 'o':
-      arguments->output_file = arg;
-      break;
-    case 's':
-      arguments->sqlFile = arg;
-      break;
-    case 'q':
-      arguments->mode = atoi(arg);
-      break;
-    case 'T':
-      arguments->num_of_threads = atoi(arg);
-      break;
-    case 'r':
-      arguments->num_of_RPR = atoi(arg);
-      break;
-    case 't':
-      arguments->num_of_tables = atoi(arg);
-      break;
-    case 'n':
-      arguments->num_of_DPT = atoi(arg);
-      break;
-    case 'd':
-      arguments->database = arg;
-      break;
-    case 'l':
-      arguments->num_of_CPR = atoi(arg);
-      break;
-    case 'b':
-      sptr = arguments->datatype;
-      if (strstr(arg, ",") == NULL) {
-        if (strcasecmp(arg, "INT") != 0 && strcasecmp(arg, "FLOAT") != 0 &&
-            strcasecmp(arg, "TINYINT") != 0 && strcasecmp(arg, "BOOL") != 0 &&
-            strcasecmp(arg, "SMALLINT") != 0 &&
-            strcasecmp(arg, "BIGINT") != 0 && strcasecmp(arg, "DOUBLE") != 0 &&
-            strcasecmp(arg, "BINARY")) {
-          argp_error(state, "Invalid data_type!");
-        }
-        sptr[0] = arg;
-      } else {
-        int index = 0;
-        char *dupstr = strdup(arg);
-        char *running = dupstr;
-        char *token = strsep(&running, ",");
-        while (token != NULL) {
-          if (strcasecmp(token, "INT") != 0 &&
-              strcasecmp(token, "FLOAT") != 0 &&
-              strcasecmp(token, "TINYINT") != 0 &&
-              strcasecmp(token, "BOOL") != 0 &&
-              strcasecmp(token, "SMALLINT") != 0 &&
-              strcasecmp(token, "BIGINT") != 0 &&
-              strcasecmp(token, "DOUBLE") != 0 && strcasecmp(token, "BINARY")) {
+#ifdef LINUX
+  /* The options we understand. */
+  static struct argp_option options[] = {
+    {0, 'h', "host",                     0, "The host to connect to TDengine. Default is localhost.",                                                           0},
+    {0, 'p', "port",                     0, "The TCP/IP port number to use for the connection. Default is 0.",                                                  1},
+    {0, 'u', "user",                     0, "The TDengine user name to use when connecting to the server. Default is 'root'.",                                  2},
+    #ifdef _TD_POWER_    
+    {0, 'P', "password",                 0, "The password to use when connecting to the server. Default is 'powerdb'.",                                         3},
+    #else
+    {0, 'P', "password",                 0, "The password to use when connecting to the server. Default is 'taosdata'.",                                        3},
+    #endif
+    {0, 'd', "database",                 0, "Destination database. Default is 'test'.",                                                                         3},
+    {0, 'a', "replica",                  0, "Set the replica parameters of the database, Default 1, min: 1, max: 3.",                                              3},
+    {0, 'm', "table_prefix",             0, "Table prefix name. Default is 't'.",                                                                               3},
+    {0, 's', "sql file",                 0, "The select sql file.",                                                                                             3},
+    {0, 'M', 0,                          0, "Use metric flag.",                                                                                                 13},
+    {0, 'o', "outputfile",               0, "Direct output to the named file. Default is './output.txt'.",                                                      14},
+    {0, 'q', "query_mode",               0, "Query mode--0: SYNC, 1: ASYNC. Default is SYNC.",                                                                  6},
+    {0, 'b', "type_of_cols",             0, "The data_type of columns: 'INT', 'TINYINT', 'SMALLINT', 'BIGINT', 'FLOAT', 'DOUBLE', 'BINARY'. Default is 'INT'.", 7},
+    {0, 'w', "length_of_binary",         0, "The length of data_type 'BINARY'. Only applicable when type of cols is 'BINARY'. Default is 8",                    8},
+    {0, 'l', "num_of_cols_per_record",   0, "The number of columns per record. Default is 3.",                                                                  8},
+    {0, 'T', "num_of_threads",           0, "The number of threads. Default is 10.",                                                                            9},
+    {0, 'r', "num_of_records_per_req",   0, "The number of records per request. Default is 1000.",                                                              10},
+    {0, 't', "num_of_tables",            0, "The number of tables. Default is 10000.",                                                                          11},
+    {0, 'n', "num_of_records_per_table", 0, "The number of records per table. Default is 100000.",                                                              12},
+    #ifdef _TD_POWER_
+    {0, 'c', "config_directory",         0, "Configuration directory. Default is '/etc/power/'.",                                                               14},
+    #else
+    {0, 'c', "config_directory",         0, "Configuration directory. Default is '/etc/taos/'.",                                                                14},
+    #endif
+    {0, 'x', 0,                          0, "Insert only flag.",                                                                                                13},
+    {0, 'O', "order",                    0, "Insert mode--0: In order, 1: Out of order. Default is in order.",                                                  14},
+    {0, 'R', "rate",                     0, "Out of order data's rate--if order=1 Default 10, min: 0, max: 50.",                                                14},
+    {0, 'D', "delete table",             0, "Delete data methods——0: don't delete, 1: delete by table, 2: delete by stable, 3: delete by database",             14},
+    {0}};
+
+  /* Parse a single option. */
+  static error_t parse_opt(int key, char *arg, struct argp_state *state) {
+    /* Get the input argument from argp_parse, which we
+      know is a pointer to our arguments structure. */
+    SDemoArguments *arguments = state->input;
+    wordexp_t full_path;
+    char **sptr;
+    switch (key) {
+      case 'h':
+        arguments->host = arg;
+        break;
+      case 'p':
+        arguments->port = atoi(arg);
+        break;
+      case 'u':
+        arguments->user = arg;
+        break;
+      case 'P':
+        arguments->password = arg;
+        break;
+      case 'o':
+        arguments->output_file = arg;
+        break;
+      case 's':
+        arguments->sqlFile = arg;
+        break;
+      case 'q':
+        arguments->mode = atoi(arg);
+        break;
+      case 'T':
+        arguments->num_of_threads = atoi(arg);
+        break;
+      case 'r':
+        arguments->num_of_RPR = atoi(arg);
+        break;
+      case 't':
+        arguments->num_of_tables = atoi(arg);
+        break;
+      case 'n':
+        arguments->num_of_DPT = atoi(arg);
+        break;
+      case 'd':
+        arguments->database = arg;
+        break;
+      case 'l':
+        arguments->num_of_CPR = atoi(arg);
+        break;
+      case 'b':
+        sptr = arguments->datatype;
+        if (strstr(arg, ",") == NULL) {
+          if (strcasecmp(arg, "INT") != 0 && strcasecmp(arg, "FLOAT") != 0 &&
+              strcasecmp(arg, "TINYINT") != 0 && strcasecmp(arg, "BOOL") != 0 &&
+              strcasecmp(arg, "SMALLINT") != 0 &&
+              strcasecmp(arg, "BIGINT") != 0 && strcasecmp(arg, "DOUBLE") != 0 &&
+              strcasecmp(arg, "BINARY") && strcasecmp(arg, "NCHAR")) {
             argp_error(state, "Invalid data_type!");
           }
-          sptr[index++] = token;
-          token = strsep(&running, ", ");
+          sptr[0] = arg;
+        } else {
+          int index = 0;
+          char *dupstr = strdup(arg);
+          char *running = dupstr;
+          char *token = strsep(&running, ",");
+          while (token != NULL) {
+            if (strcasecmp(token, "INT") != 0 &&
+                strcasecmp(token, "FLOAT") != 0 &&
+                strcasecmp(token, "TINYINT") != 0 &&
+                strcasecmp(token, "BOOL") != 0 &&
+                strcasecmp(token, "SMALLINT") != 0 &&
+                strcasecmp(token, "BIGINT") != 0 &&
+                strcasecmp(token, "DOUBLE") != 0 && strcasecmp(token, "BINARY") && strcasecmp(token, "NCHAR")) {
+              argp_error(state, "Invalid data_type!");
+            }
+            sptr[index++] = token;
+            token = strsep(&running, ",");
+            if (index >= MAX_NUM_DATATYPE) break;
+          }
         }
-      }
-      break;
-    case 'w':
-      arguments->len_of_binary = atoi(arg);
-      break;
-    case 'm':
-      arguments->tb_prefix = arg;
-      break;
-    case 'M':
-      arguments->use_metric = false;
-      break;
-    case 'x':
-      arguments->insert_only = false;
-      break;
-    case 'c':
-      if (wordexp(arg, &full_path, 0) != 0) {
-        fprintf(stderr, "Invalid path %s\n", arg);
-        return -1;
-      }
-      taos_options(TSDB_OPTION_CONFIGDIR, full_path.we_wordv[0]);
-      wordfree(&full_path);
-      break;
-    case 'O':
-      arguments->order = atoi(arg);
-      if (arguments->order > 1 || arguments->order < 0)
-      {
-        arguments->order = 0;
-      } else if (arguments->order == 1)
-      {
-        arguments->rate = 10;
-      }
-      break;
-    case 'R':
-      arguments->rate = atoi(arg);
-      if (arguments->order == 1 && (arguments->rate > 50 || arguments->rate <= 0))
-      {
-        arguments->rate = 10;
-      }
-      break;
-    case 'D':
-      arguments->method_of_delete = atoi(arg);
-      if (arguments->method_of_delete < 0 || arguments->method_of_delete > 3)
-      {
-        arguments->method_of_delete = 0;
-      }
-      break;
-    case OPT_ABORT:
-      arguments->abort = 1;
-      break;
-    case ARGP_KEY_ARG:
-      /*arguments->arg_list = &state->argv[state->next-1];
-      state->next = state->argc;*/
-      argp_usage(state);
-      break;
+        break;
+      case 'w':
+        arguments->len_of_binary = atoi(arg);
+        break;
+      case 'm':
+        arguments->tb_prefix = arg;
+        break;
+      case 'M':
+        arguments->use_metric = false;
+        break;
+      case 'x':
+        arguments->insert_only = false;
+        break;
+      case 'c':
+        if (wordexp(arg, &full_path, 0) != 0) {
+          fprintf(stderr, "Invalid path %s\n", arg);
+          return -1;
+        }
+        taos_options(TSDB_OPTION_CONFIGDIR, full_path.we_wordv[0]);
+        wordfree(&full_path);
+        break;
+      case 'O':
+        arguments->order = atoi(arg);
+        if (arguments->order > 1 || arguments->order < 0)
+        {
+          arguments->order = 0;
+        } else if (arguments->order == 1)
+        {
+          arguments->rate = 10;
+        }
+        break;
+      case 'R':
+        arguments->rate = atoi(arg);
+        if (arguments->order == 1 && (arguments->rate > 50 || arguments->rate <= 0))
+        {
+          arguments->rate = 10;
+        }
+        break;
+      case 'a':
+        arguments->replica = atoi(arg);
+        if (arguments->replica > 3 || arguments->replica < 1)
+        {
+          arguments->replica = 1;
+        }
+        break;
+      case 'D':
+        arguments->method_of_delete = atoi(arg);
+        if (arguments->method_of_delete < 0 || arguments->method_of_delete > 3)
+        {
+          arguments->method_of_delete = 0;
+        }
+        break;
+      case OPT_ABORT:
+        arguments->abort = 1;
+        break;
+      case ARGP_KEY_ARG:
+        /*arguments->arg_list = &state->argv[state->next-1];
+        state->next = state->argc;*/
+        argp_usage(state);
+        break;
 
-    default:
-      return ARGP_ERR_UNKNOWN;
+      default:
+        return ARGP_ERR_UNKNOWN;
+    }
+    return 0;
   }
-  return 0;
-}
+
+  static struct argp argp = {options, parse_opt, 0, 0};
+
+  void parse_args(int argc, char *argv[], SDemoArguments *arguments) {
+    argp_parse(&argp, argc, argv, 0, 0, arguments);
+    if (arguments->abort) {
+      #ifndef _ALPINE
+        error(10, 0, "ABORTED");
+      #else
+        abort();
+      #endif
+    }
+  }
+
+#else
+  void printHelp() {
+    char indent[10] = "        ";
+    printf("%s%s\n", indent, "-h");
+    printf("%s%s%s\n", indent, indent, "host, The host to connect to TDengine. Default is localhost.");
+    printf("%s%s\n", indent, "-p");
+    printf("%s%s%s\n", indent, indent, "port, The TCP/IP port number to use for the connection. Default is 0.");
+    printf("%s%s\n", indent, "-u");
+    printf("%s%s%s\n", indent, indent, "user, The user name to use when connecting to the server. Default is 'root'.");
+    printf("%s%s\n", indent, "-p");
+    #ifdef _TD_POWER_    
+    printf("%s%s%s\n", indent, indent, "password, The password to use when connecting to the server. Default is 'powerdb'.");
+    #else
+    printf("%s%s%s\n", indent, indent, "password, The password to use when connecting to the server. Default is 'taosdata'.");
+    #endif
+    printf("%s%s\n", indent, "-d");
+    printf("%s%s%s\n", indent, indent, "database, Destination database. Default is 'test'.");
+    printf("%s%s\n", indent, "-a");
+    printf("%s%s%s\n", indent, indent, "replica, Set the replica parameters of the database, Default 1, min: 1, max: 3.");
+    printf("%s%s\n", indent, "-m");
+    printf("%s%s%s\n", indent, indent, "table_prefix, Table prefix name. Default is 't'.");
+    printf("%s%s\n", indent, "-s");
+    printf("%s%s%s\n", indent, indent, "sql file, The select sql file.");
+    printf("%s%s\n", indent, "-M");
+    printf("%s%s%s\n", indent, indent, "meteric, Use metric flag.");
+    printf("%s%s\n", indent, "-o");
+    printf("%s%s%s\n", indent, indent, "outputfile, Direct output to the named file. Default is './output.txt'.");
+    printf("%s%s\n", indent, "-q");
+    printf("%s%s%s\n", indent, indent, "query_mode, Query mode--0: SYNC, 1: ASYNC. Default is SYNC.");
+    printf("%s%s\n", indent, "-b");
+    printf("%s%s%s\n", indent, indent, "type_of_cols, data_type of columns: 'INT', 'TINYINT', 'SMALLINT', 'BIGINT', 'FLOAT', 'DOUBLE', 'BINARY'. Default is 'INT'.");
+    printf("%s%s\n", indent, "-w");
+    printf("%s%s%s\n", indent, indent, "length_of_binary, The length of data_type 'BINARY'. Only applicable when type of cols is 'BINARY'. Default is 8");
+    printf("%s%s\n", indent, "-l");
+    printf("%s%s%s\n", indent, indent, "num_of_cols_per_record, The number of columns per record. Default is 3.");
+    printf("%s%s\n", indent, "-T");
+    printf("%s%s%s\n", indent, indent, "num_of_threads, The number of threads. Default is 10.");
+    printf("%s%s\n", indent, "-r");
+    printf("%s%s%s\n", indent, indent, "num_of_records_per_req, The number of records per request. Default is 1000.");
+    printf("%s%s\n", indent, "-t");
+    printf("%s%s%s\n", indent, indent, "num_of_tables, The number of tables. Default is 10000.");
+    printf("%s%s\n", indent, "-n");
+    printf("%s%s%s\n", indent, indent, "num_of_records_per_table, The number of records per table. Default is 100000.");
+    printf("%s%s\n", indent, "-c");
+    #ifdef _TD_POWER_
+    printf("%s%s%s\n", indent, indent, "config_directory, Configuration directory. Default is '/etc/power/'.");
+    #else
+    printf("%s%s%s\n", indent, indent, "config_directory, Configuration directory. Default is '/etc/taos/'.");
+    #endif
+    printf("%s%s\n", indent, "-x");
+    printf("%s%s%s\n", indent, indent, "flag, Insert only flag.");
+    printf("%s%s\n", indent, "-O");
+    printf("%s%s%s\n", indent, indent, "order, Insert mode--0: In order, 1: Out of order. Default is in order.");
+    printf("%s%s\n", indent, "-R");
+    printf("%s%s%s\n", indent, indent, "rate, Out of order data's rate--if order=1 Default 10, min: 0, max: 50.");
+    printf("%s%s\n", indent, "-D");
+    printf("%s%s%s\n", indent, indent, "Delete data methods 0: don't delete, 1: delete by table, 2: delete by stable, 3: delete by database.");
+  }
+
+  void parse_args(int argc, char *argv[], SDemoArguments *arguments) {
+    char **sptr;
+    for (int i = 1; i < argc; i++) {
+      if (strcmp(argv[i], "-h") == 0) {
+        arguments->host = argv[++i];
+      } else if (strcmp(argv[i], "-p") == 0) {
+        arguments->port = atoi(argv[++i]);
+      } else if (strcmp(argv[i], "-u") == 0) {
+        arguments->user = argv[++i];
+      } else if (strcmp(argv[i], "-P") == 0) {
+        arguments->password = argv[++i];
+      } else if (strcmp(argv[i], "-o") == 0) {
+        arguments->output_file = argv[++i];
+      } else if (strcmp(argv[i], "-s") == 0) {
+        arguments->sqlFile = argv[++i];
+      } else if (strcmp(argv[i], "-q") == 0) {
+        arguments->mode = atoi(argv[++i]);
+      } else if (strcmp(argv[i], "-T") == 0) {
+        arguments->num_of_threads = atoi(argv[++i]);
+      } else if (strcmp(argv[i], "-r") == 0) {
+        arguments->num_of_RPR = atoi(argv[++i]);
+      } else if (strcmp(argv[i], "-t") == 0) {
+        arguments->num_of_tables = atoi(argv[++i]);
+      } else if (strcmp(argv[i], "-n") == 0) {
+        arguments->num_of_DPT = atoi(argv[++i]);
+      } else if (strcmp(argv[i], "-d") == 0) {
+        arguments->database = argv[++i];
+      } else if (strcmp(argv[i], "-l") == 0) {
+        arguments->num_of_CPR = atoi(argv[++i]);
+      } else if (strcmp(argv[i], "-b") == 0) {
+        sptr = arguments->datatype;
+        ++i;
+        if (strstr(argv[i], ",") == NULL) {
+          if (strcasecmp(argv[i], "INT") != 0 && strcasecmp(argv[i], "FLOAT") != 0 &&
+              strcasecmp(argv[i], "TINYINT") != 0 && strcasecmp(argv[i], "BOOL") != 0 &&
+              strcasecmp(argv[i], "SMALLINT") != 0 &&
+              strcasecmp(argv[i], "BIGINT") != 0 && strcasecmp(argv[i], "DOUBLE") != 0 &&
+              strcasecmp(argv[i], "BINARY") && strcasecmp(argv[i], "NCHAR")) {
+            fprintf(stderr, "Invalid data_type!\n");
+            printHelp();
+            exit(EXIT_FAILURE);
+          }
+          sptr[0] = argv[i];
+        } else {
+          int index = 0;
+          char *dupstr = strdup(argv[i]);
+          char *running = dupstr;
+          char *token = strsep(&running, ",");
+          while (token != NULL) {
+            if (strcasecmp(token, "INT") != 0 &&
+                strcasecmp(token, "FLOAT") != 0 &&
+                strcasecmp(token, "TINYINT") != 0 &&
+                strcasecmp(token, "BOOL") != 0 &&
+                strcasecmp(token, "SMALLINT") != 0 &&
+                strcasecmp(token, "BIGINT") != 0 &&
+                strcasecmp(token, "DOUBLE") != 0 && strcasecmp(token, "BINARY") && strcasecmp(token, "NCHAR")) {
+              fprintf(stderr, "Invalid data_type!\n");
+              printHelp();
+              exit(EXIT_FAILURE);
+            }
+            sptr[index++] = token;
+            token = strsep(&running, ",");
+            if (index >= MAX_NUM_DATATYPE) break;
+          }
+        }
+      } else if (strcmp(argv[i], "-w") == 0) {
+        arguments->len_of_binary = atoi(argv[++i]);
+      } else if (strcmp(argv[i], "-m") == 0) {
+        arguments->tb_prefix = argv[++i];
+      } else if (strcmp(argv[i], "-M") == 0) {
+        arguments->use_metric = false;
+      } else if (strcmp(argv[i], "-x") == 0) {
+        arguments->insert_only = false;
+      } else if (strcmp(argv[i], "-c") == 0) {
+        strcpy(configDir, argv[++i]);
+      } else if (strcmp(argv[i], "-O") == 0) {
+        arguments->order = atoi(argv[++i]);
+        if (arguments->order > 1 || arguments->order < 0) {
+          arguments->order = 0;
+        } else if (arguments->order == 1) {
+          arguments->rate = 10;
+        }
+      } else if (strcmp(argv[i], "-R") == 0) {
+        arguments->rate = atoi(argv[++i]);
+        if (arguments->order == 1 && (arguments->rate > 50 || arguments->rate <= 0)) {
+          arguments->rate = 10;
+        }
+      } else if (strcmp(argv[i], "-a") == 0) {
+        arguments->replica = atoi(argv[++i]);
+        if (arguments->rate > 3 || arguments->rate < 1) {
+          arguments->rate = 1;
+        }
+      } else if (strcmp(argv[i], "-D") == 0) {
+        arguments->method_of_delete = atoi(argv[++i]);
+        if (arguments->method_of_delete < 0 || arguments->method_of_delete > 3) {
+          arguments->method_of_delete = 0;
+        }
+      } else if (strcmp(argv[i], "--help") == 0) {
+        printHelp();
+        exit(EXIT_FAILURE);
+      } else {
+        fprintf(stderr, "wrong options\n");
+        printHelp();
+        exit(EXIT_FAILURE);
+      }
+    }
+  }
+
+#endif
 
 /* ******************************* Structure
  * definition*******************************  */
@@ -263,9 +472,9 @@ typedef struct {
   char* cols;  
   bool  use_metric;
 
-  sem_t mutex_sem;
+  tsem_t mutex_sem;
   int notFinished;
-  sem_t lock_sem;
+  tsem_t lock_sem;
 } info;
 
 typedef struct {
@@ -282,18 +491,15 @@ typedef struct {
   int data_of_order;
   int data_of_rate;
 
-  sem_t *mutex_sem;
-  int   *notFinished;
-  sem_t *lock_sem;
+  tsem_t *mutex_sem;
+  int    *notFinished;
+  tsem_t *lock_sem;
 } sTable;
 
 /* ******************************* Global
  * variables*******************************  */
 char *aggreFunc[] = {"*", "count(*)", "avg(f1)", "sum(f1)", "max(f1)", "min(f1)", "first(f1)", "last(f1)"};
 
-/* ******************************* Global
- * functions*******************************  */
-static struct argp argp = {options, parse_opt, 0, 0};
 
 void queryDB(TAOS *taos, char *command);
 
@@ -311,6 +517,8 @@ int generateData(char *res, char **data_type, int num_of_cols, int64_t timestamp
 
 void rand_string(char *str, int size);
 
+void init_rand_data();
+
 double getCurrentTime();
 
 void callBack(void *param, TAOS_RES *res, int code);
@@ -321,8 +529,13 @@ int main(int argc, char *argv[]) {
   SDemoArguments arguments = {  NULL,            // host
                                 0,               // port
                                 "root",          // user
+                                #ifdef _TD_POWER_ 
+                                "powerdb",      // password
+                                #else
                                 "taosdata",      // password
+                                #endif
                                 "test",          // database
+                                1,               // replica
                                 "t",             // tb_prefix
                                 NULL,
                                 false,           // use_metric
@@ -331,13 +544,13 @@ int main(int argc, char *argv[]) {
                                 0,               // mode
                                 {
                                 "int",           // datatype
-                                "",
-                                "",
-                                "",
-                                "",
-                                "",
-                                "",
-                                ""
+                                "int",
+                                "int",
+                                "int",
+                                "int",
+                                "int",
+                                "int",
+                                "float"
                                 },
                                 8,               // len_of_binary
                                 1,               // num_of_CPR
@@ -361,18 +574,10 @@ int main(int argc, char *argv[]) {
   arguments.num_of_DPT = 100000;
   arguments.num_of_RPR = 1000;
   arguments.use_metric = true;
-  arguments.insert_only = false;
+  arguments.insert_only = true;
   // end change
 
-  argp_parse(&argp, argc, argv, 0, 0, &arguments);
-
-  if (arguments.abort) {
-    #ifndef _ALPINE
-      error(10, 0, "ABORTED");
-    #else
-      abort();
-    #endif
-  }
+  parse_args(argc, argv, &arguments);
 
   enum MODE query_mode = arguments.mode;
   char *ip_addr = arguments.host;
@@ -396,6 +601,7 @@ int main(int argc, char *argv[]) {
   int count_data_type = 0;
   char dataString[STRING_LEN];
   bool do_aggreFunc = true;
+  int replica = arguments.replica;
 
   if (NULL != arguments.sqlFile) {
     TAOS* qtaos = taos_connect(ip_addr, user, pass, db_name, port);
@@ -403,15 +609,16 @@ int main(int argc, char *argv[]) {
     taos_close(qtaos);
     return 0;
   }
+  init_rand_data();
 
   memset(dataString, 0, STRING_LEN);
   int len = 0;
 
-  if (strcasecmp(data_type[0], "BINARY") == 0 || strcasecmp(data_type[0], "BOOL") == 0) {
+  if (strcasecmp(data_type[0], "BINARY") == 0 || strcasecmp(data_type[0], "BOOL") == 0 || strcasecmp(data_type[0], "NCHAR") == 0 ) {
     do_aggreFunc = false;
   }
   for (; count_data_type <= MAX_NUM_DATATYPE; count_data_type++) {
-    if (strcasecmp(data_type[count_data_type], "") == 0) {
+    if (data_type[count_data_type] == NULL) {
       break;
     }
 
@@ -433,7 +640,7 @@ int main(int argc, char *argv[]) {
   printf("# Use metric:                        %s\n", use_metric ? "true" : "false");
   printf("# Datatype of Columns:               %s\n", dataString);
   printf("# Binary Length(If applicable):      %d\n",
-          (strcasestr(dataString, "BINARY") != NULL) ? len_of_binary : -1);
+         (strncasecmp(dataString, "BINARY", 6) == 0 || strncasecmp(dataString, "NCHAR", 5) == 0) ? len_of_binary : -1);
   printf("# Number of Columns per record:      %d\n", ncols_per_record);
   printf("# Number of Threads:                 %d\n", threads);
   printf("# Number of Tables:                  %d\n", ntables);
@@ -461,7 +668,7 @@ int main(int argc, char *argv[]) {
   fprintf(fp, "# Use metric:                        %s\n", use_metric ? "true" : "false");
   fprintf(fp, "# Datatype of Columns:               %s\n", dataString);
   fprintf(fp, "# Binary Length(If applicable):      %d\n",
-          (strcasestr(dataString, "BINARY") != NULL) ? len_of_binary : -1);
+         (strncasecmp(dataString, "BINARY", 6) == 0 || strncasecmp(dataString, "NCHAR", 5) == 0) ? len_of_binary : -1);
   fprintf(fp, "# Number of Columns per record:      %d\n", ncols_per_record);
   fprintf(fp, "# Number of Threads:                 %d\n", threads);
   fprintf(fp, "# Number of Tables:                  %d\n", ntables);
@@ -492,7 +699,7 @@ int main(int argc, char *argv[]) {
   TAOS_RES* res = taos_query(taos, command);
   taos_free_result(res);
 
-  sprintf(command, "create database %s;", db_name);
+  sprintf(command, "create database %s replica %d;", db_name, replica);
   res = taos_query(taos, command);
   taos_free_result(res);
 
@@ -501,23 +708,23 @@ int main(int argc, char *argv[]) {
   len = 0;
 
   for (; colIndex < ncols_per_record - 1; colIndex++) {
-    if (strcasecmp(data_type[colIndex % count_data_type], "BINARY") != 0) {
+    if (strcasecmp(data_type[colIndex % count_data_type], "BINARY") != 0 && strcasecmp(data_type[colIndex % count_data_type], "NCHAR") != 0) {
       len += snprintf(cols + len, STRING_LEN - len, ",f%d %s", colIndex + 1, data_type[colIndex % count_data_type]);
     } else {
       len += snprintf(cols + len, STRING_LEN - len, ",f%d %s(%d)", colIndex + 1, data_type[colIndex % count_data_type], len_of_binary);
     }
   }
 
-  if (strcasecmp(data_type[colIndex % count_data_type], "BINARY") != 0) {
-    len += snprintf(cols + len, STRING_LEN - len, ",f%d %s)", colIndex + 1, data_type[colIndex % count_data_type]);
+  if (strcasecmp(data_type[colIndex % count_data_type], "BINARY") != 0 && strcasecmp(data_type[colIndex % count_data_type], "NCHAR") != 0){
+    len += snprintf(cols + len, STRING_LEN - len, ",f%d %s", colIndex + 1, data_type[colIndex % count_data_type]);
   } else {
-    len += snprintf(cols + len, STRING_LEN - len, ",f%d %s(%d))", colIndex + 1, data_type[colIndex % count_data_type], len_of_binary);
+    len += snprintf(cols + len, STRING_LEN - len, ",f%d %s(%d)", colIndex + 1, data_type[colIndex % count_data_type], len_of_binary);
   }
 
   if (use_metric) {
     /* Create metric table */
     printf("Creating meters super table...\n");
-    snprintf(command, BUFFER_SIZE, "create table if not exists %s.meters (ts timestamp%s tags (areaid int, loc binary(10))", db_name, cols);
+    snprintf(command, BUFFER_SIZE, "create table if not exists %s.meters (ts timestamp%s) tags (areaid int, loc binary(10))", db_name, cols);
     queryDB(taos, command);
     printf("meters created!\n");
   }
@@ -560,9 +767,9 @@ int main(int argc, char *argv[]) {
     t_info->end_table_id = i < b ? last + a : last + a - 1;
     last = t_info->end_table_id + 1;
 
-    sem_init(&(t_info->mutex_sem), 0, 1);
+    tsem_init(&(t_info->mutex_sem), 0, 1);
     t_info->notFinished = t_info->end_table_id - t_info->start_table_id + 1;
-    sem_init(&(t_info->lock_sem), 0, 0);
+    tsem_init(&(t_info->lock_sem), 0, 0);
 
     if (query_mode == SYNC) {
       pthread_create(pids + i, NULL, syncWrite, t_info);
@@ -593,8 +800,8 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < threads; i++) {
     info *t_info = infos + i;
     taos_close(t_info->taos);
-    sem_destroy(&(t_info->mutex_sem));
-    sem_destroy(&(t_info->lock_sem));
+    tsem_destroy(&(t_info->mutex_sem));
+    tsem_destroy(&(t_info->lock_sem));
   }
 
   free(pids);
@@ -748,7 +955,7 @@ void querySqlFile(TAOS* taos, char* sqlFile)
 
   double t = getCurrentTime();
   
-  while ((read_len = getline(&line, &line_len, fp)) != -1) {
+  while ((read_len = taosGetline(&line, &line_len, fp)) != -1) {
     if (read_len >= MAX_SQL_SIZE) continue;
     line[--read_len] = '\0';
 
@@ -852,8 +1059,8 @@ void multiThreadCreateTable(char* cols, bool use_metric, int threads, int ntable
 
   for (int i = 0; i < threads; i++) {
     info *t_info = infos + i;
-    sem_destroy(&(t_info->mutex_sem));
-    sem_destroy(&(t_info->lock_sem));
+    tsem_destroy(&(t_info->mutex_sem));
+    tsem_destroy(&(t_info->lock_sem));
   }
 
   free(pids);
@@ -1030,7 +1237,7 @@ void *syncWrite(void *sarg) {
   char **data_type = winfo->datatype;
   int len_of_binary = winfo->len_of_binary;
   int ncols_per_record = winfo->ncols_per_record;
-  srand(time(NULL));
+  srand((uint32_t)time(NULL));
   int64_t time_counter = winfo->start_time;
   for (int i = 0; i < winfo->nrecords_per_table;) {
     for (int tID = winfo->start_table_id; tID <= winfo->end_table_id; tID++) {
@@ -1044,7 +1251,7 @@ void *syncWrite(void *sarg) {
         int rand_num = rand() % 100;
         int len = -1;
         if (winfo->data_of_order ==1 && rand_num < winfo->data_of_rate) {
-          long d = tmp_time - rand() % 1000000 + rand_num;
+          int64_t d = tmp_time - rand() % 1000000 + rand_num;
           len = generateData(data, data_type, ncols_per_record, d, len_of_binary);
         } else {
           len = generateData(data, data_type, ncols_per_record, tmp_time += 1000, len_of_binary);
@@ -1103,7 +1310,7 @@ void *asyncWrite(void *sarg) {
     taos_query_a(winfo->taos, "show databases", callBack, tb_info);
   }
 
-  sem_wait(&(winfo->lock_sem));
+  tsem_wait(&(winfo->lock_sem));
   free(tb_infos);
 
   return NULL;
@@ -1123,10 +1330,10 @@ void callBack(void *param, TAOS_RES *res, int code) {
 
   // If finished;
   if (tb_info->counter >= tb_info->target) {
-    sem_wait(tb_info->mutex_sem);
+    tsem_wait(tb_info->mutex_sem);
     (*(tb_info->notFinished))--;
-    if (*(tb_info->notFinished) == 0) sem_post(tb_info->lock_sem);
-    sem_post(tb_info->mutex_sem);
+    if (*(tb_info->notFinished) == 0) tsem_post(tb_info->lock_sem);
+    tsem_post(tb_info->mutex_sem);
     return;
   }
 
@@ -1139,7 +1346,7 @@ void callBack(void *param, TAOS_RES *res, int code) {
     int rand_num = rand() % 100;
     if (tb_info->data_of_order ==1 && rand_num < tb_info->data_of_rate)
     {
-      long d = tmp_time - rand() % 1000000 + rand_num;
+      int64_t d = tmp_time - rand() % 1000000 + rand_num;
       generateData(data, datatype, ncols_per_record, d, len_of_binary);
     } else 
     {
@@ -1169,6 +1376,66 @@ double getCurrentTime() {
   return tv.tv_sec + tv.tv_usec / 1E6;
 }
 
+int32_t  randint[MAX_PREPARED_RAND];
+int64_t  randbigint[MAX_PREPARED_RAND];
+float  randfloat[MAX_PREPARED_RAND];
+double  randdouble[MAX_PREPARED_RAND];
+
+int32_t rand_tinyint(){
+  static int cursor;
+  cursor++;
+  cursor = cursor % MAX_PREPARED_RAND;
+  return randint[cursor] % 128;
+
+}
+
+int32_t rand_smallint(){
+  static int cursor;
+  cursor++;
+  cursor = cursor % MAX_PREPARED_RAND;
+  return randint[cursor] % 32767;
+}
+
+int32_t rand_int(){
+  static int cursor;
+  cursor++;
+  cursor = cursor % MAX_PREPARED_RAND;
+  return randint[cursor];
+}
+
+int64_t rand_bigint(){
+  static int cursor;
+  cursor++;
+  cursor = cursor % MAX_PREPARED_RAND;
+  return randbigint[cursor];
+  
+}
+
+float rand_float(){
+  static int cursor;
+  cursor++;
+  cursor = cursor % MAX_PREPARED_RAND;
+  return randfloat[cursor];  
+  
+}
+
+double rand_double() {
+  static int cursor;
+  cursor++;
+  cursor = cursor % MAX_PREPARED_RAND;
+  return randdouble[cursor];
+
+}
+
+void init_rand_data(){
+  for (int i = 0; i < MAX_PREPARED_RAND; i++){
+    randint[i] = (int)(rand() % 10);
+    randbigint[i] = (int64_t)(rand() % 2147483648);
+    randfloat[i] = (float)(rand() / 1000.0);
+    randdouble[i] = (double)(rand() / 1000000.0);
+  }
+}
+
 int32_t generateData(char *res, char **data_type, int num_of_cols, int64_t timestamp, int len_of_binary) {
   memset(res, 0, MAX_DATA_SIZE);
   char *pstr = res;
@@ -1176,7 +1443,7 @@ int32_t generateData(char *res, char **data_type, int num_of_cols, int64_t times
   int c = 0;
 
   for (; c < MAX_NUM_DATATYPE; c++) {
-    if (strcasecmp(data_type[c], "") == 0) {
+    if (data_type[c] == NULL) {
       break;
     }
   }
@@ -1188,25 +1455,31 @@ int32_t generateData(char *res, char **data_type, int num_of_cols, int64_t times
 
   for (int i = 0; i < num_of_cols; i++) {
     if (strcasecmp(data_type[i % c], "tinyint") == 0) {
-      pstr += sprintf(pstr, ", %d", (int)(rand() % 128));
+      pstr += sprintf(pstr, ", %d", rand_tinyint() );
     } else if (strcasecmp(data_type[i % c], "smallint") == 0) {
-      pstr += sprintf(pstr, ", %d", (int)(rand() % 32767));
+      pstr += sprintf(pstr, ", %d", rand_smallint());
     } else if (strcasecmp(data_type[i % c], "int") == 0) {
-      pstr += sprintf(pstr, ", %d", (int)(rand() % 10)); 
+      pstr += sprintf(pstr, ", %d", rand_int()); 
     } else if (strcasecmp(data_type[i % c], "bigint") == 0) {
-      pstr += sprintf(pstr, ", %" PRId64, rand() % 2147483648);
+      pstr += sprintf(pstr, ", %" PRId64, rand_bigint());
     } else if (strcasecmp(data_type[i % c], "float") == 0) {
-      pstr += sprintf(pstr, ", %10.4f", (float)(rand() / 1000.0));
+      pstr += sprintf(pstr, ", %10.4f", rand_float());
     } else if (strcasecmp(data_type[i % c], "double") == 0) {
-      double t = (double)(rand() / 1000000.0);
+      double t = rand_double();
       pstr += sprintf(pstr, ", %20.8f", t);
     } else if (strcasecmp(data_type[i % c], "bool") == 0) {
       bool b = rand() & 1;
       pstr += sprintf(pstr, ", %s", b ? "true" : "false");
     } else if (strcasecmp(data_type[i % c], "binary") == 0) {
-      char s[len_of_binary];
+      char *s = malloc(len_of_binary);
       rand_string(s, len_of_binary);
       pstr += sprintf(pstr, ", \"%s\"", s);
+      free(s);
+    }else if (strcasecmp(data_type[i % c], "nchar") == 0) {
+      char *s = malloc(len_of_binary);
+      rand_string(s, len_of_binary);
+      pstr += sprintf(pstr, ", \"%s\"", s);
+      free(s);
     }
 
     if (pstr - res > MAX_DATA_SIZE) {
@@ -1217,7 +1490,7 @@ int32_t generateData(char *res, char **data_type, int num_of_cols, int64_t times
 
   pstr += sprintf(pstr, ")");
 
-  return pstr - res;
+  return (int32_t)(pstr - res);
 }
 
 static const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJK1234567890";

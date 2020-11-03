@@ -145,10 +145,11 @@ static void tscInitCorVgroupInfo(SCMCorVgroupInfo *corVgroupInfo, SCMVgroupInfo 
   corVgroupInfo->inUse = 0;
   corVgroupInfo->numOfEps = vgroupInfo->numOfEps;
   for (int32_t i = 0; i < corVgroupInfo->numOfEps; i++) {
-    strncpy(corVgroupInfo->epAddr[i].fqdn, vgroupInfo->epAddr[i].fqdn, TSDB_FQDN_LEN);
+    corVgroupInfo->epAddr[i].fqdn = strdup(vgroupInfo->epAddr[i].fqdn);
     corVgroupInfo->epAddr[i].port = vgroupInfo->epAddr[i].port;
   }
 }
+
 STableMeta* tscCreateTableMetaFromMsg(STableMetaMsg* pTableMetaMsg, size_t* size) {
   assert(pTableMetaMsg != NULL);
   
@@ -162,14 +163,25 @@ STableMeta* tscCreateTableMetaFromMsg(STableMetaMsg* pTableMetaMsg, size_t* size
     .numOfColumns = pTableMetaMsg->numOfColumns,
   };
   
-  pTableMeta->id.tid = pTableMetaMsg->sid;
+  pTableMeta->id.tid = pTableMetaMsg->tid;
   pTableMeta->id.uid = pTableMetaMsg->uid;
-  pTableMeta->vgroupInfo = pTableMetaMsg->vgroup;
+
+  SCMVgroupInfo* pVgroupInfo = &pTableMeta->vgroupInfo;
+  pVgroupInfo->numOfEps = pTableMetaMsg->vgroup.numOfEps;
+  pVgroupInfo->vgId = pTableMetaMsg->vgroup.vgId;
+
+  for(int32_t i = 0; i < pVgroupInfo->numOfEps; ++i) {
+    SEpAddrMsg* pEpMsg = &pTableMetaMsg->vgroup.epAddr[i];
+
+    pVgroupInfo->epAddr[i].fqdn = strndup(pEpMsg->fqdn, tListLen(pEpMsg->fqdn));
+    pVgroupInfo->epAddr[i].port = pEpMsg->port;
+  }
 
   tscInitCorVgroupInfo(&pTableMeta->corVgroupInfo, &pTableMeta->vgroupInfo);
 
   pTableMeta->sversion = pTableMetaMsg->sversion;
   pTableMeta->tversion = pTableMetaMsg->tversion;
+  tstrncpy(pTableMeta->sTableId, pTableMetaMsg->sTableId, TSDB_TABLE_FNAME_LEN);
   
   memcpy(pTableMeta->schema, pTableMetaMsg->schema, schemaSize);
   
@@ -208,7 +220,7 @@ char* tsGetTagsValue(STableMeta* pTableMeta) {
 }
 
 // todo refactor
-__attribute__ ((unused))static FORCE_INLINE char* skipSegments(char* input, char delim, int32_t num) {
+UNUSED_FUNC static FORCE_INLINE char* skipSegments(char* input, char delim, int32_t num) {
   for (int32_t i = 0; i < num; ++i) {
     while (*input != 0 && *input++ != delim) {
     };
@@ -216,7 +228,7 @@ __attribute__ ((unused))static FORCE_INLINE char* skipSegments(char* input, char
   return input;
 }
 
-__attribute__ ((unused)) static FORCE_INLINE size_t copy(char* dst, const char* src, char delimiter) {
+UNUSED_FUNC static FORCE_INLINE size_t copy(char* dst, const char* src, char delimiter) {
   size_t len = 0;
   while (*src != delimiter && *src != 0) {
     *dst++ = *src++;

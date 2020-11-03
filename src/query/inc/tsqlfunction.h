@@ -69,6 +69,15 @@ extern "C" {
 #define TSDB_FUNC_AVG_IRATE    33
 
 #define TSDB_FUNC_TID_TAG      34
+#define TSDB_FUNC_HISTOGRAM    35
+#define TSDB_FUNC_HLL          36
+#define TSDB_FUNC_MODE         37
+#define TSDB_FUNC_SAMPLE       38
+#define TSDB_FUNC_CEIL         39
+#define TSDB_FUNC_FLOOR        40
+#define TSDB_FUNC_ROUND        41
+#define TSDB_FUNC_MAVG         42
+#define TSDB_FUNC_CSUM         43
 
 #define TSDB_FUNCSTATE_SO           0x1u    // single output
 #define TSDB_FUNCSTATE_MO           0x2u    // dynamic number of output, not multinumber of output e.g., TOP/BOTTOM
@@ -91,16 +100,16 @@ extern "C" {
 #define QUERY_COND_REL_PREFIX_IN "IN|"
 #define QUERY_COND_REL_PREFIX_LIKE "LIKE|"
 
-#define QUERY_COND_REL_PREFIX_IN_LEN 3
+#define QUERY_COND_REL_PREFIX_IN_LEN   3
 #define QUERY_COND_REL_PREFIX_LIKE_LEN 5
 
-#define QUERY_ASC_FORWARD_STEP 1
+#define QUERY_ASC_FORWARD_STEP   1
 #define QUERY_DESC_FORWARD_STEP -1
 
 #define GET_FORWARD_DIRECTION_FACTOR(ord) (((ord) == TSDB_ORDER_ASC) ? QUERY_ASC_FORWARD_STEP : QUERY_DESC_FORWARD_STEP)
 
-#define MAX_RETRIEVE_ROWS_IN_INTERVAL_QUERY 10000000
-#define TOP_BOTTOM_QUERY_LIMIT 100
+#define MAX_INTERVAL_TIME_WINDOW 1000000  // maximum allowed time windows in final results
+#define TOP_BOTTOM_QUERY_LIMIT   100
 
 enum {
   MASTER_SCAN           = 0x0u,
@@ -137,13 +146,13 @@ typedef struct SInterpInfoDetail {
 } SInterpInfoDetail;
 
 typedef struct SResultInfo {
-  int8_t  hasResult;       // result generated, not NULL value
-  bool    initialized;     // output buffer has been initialized
-  bool    complete;        // query has completed
-  bool    superTableQ;     // is super table query
-  int32_t numOfRes;        // num of output result in current buffer
-  int32_t bufLen;          // buffer size
-  void*   interResultBuf;  // output result buffer
+  int8_t   hasResult;       // result generated, not NULL value
+  bool     initialized;   // output buffer has been initialized
+  bool     complete;      // query has completed
+  bool     superTableQ;   // is super table query
+  uint32_t bufLen;       // buffer size
+  uint64_t numOfRes;        // num of output result in current buffer
+  void*    interResultBuf;  // output result buffer
 } SResultInfo;
 
 struct SQLFunctionCtx;
@@ -168,6 +177,7 @@ typedef struct SQLFunctionCtx {
   int16_t      outputType;
   int16_t      outputBytes;  // size of results, determined by function and input column data type
   bool         hasNull;      // null value exist in current block
+  bool         requireNull;  // require null in some function
   int16_t      functionId;   // function id
   void *       aInputElemBuf;
   char *       aOutputBuf;            // final result output buffer, point to sdata->data

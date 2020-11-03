@@ -38,23 +38,45 @@ SFillInfo* taosInitFillInfo(int32_t order, TSKEY skey, int32_t numOfTags, int32_
   pFillInfo->numOfTags = numOfTags;
   pFillInfo->numOfCols = numOfCols;
   pFillInfo->precision = precision;
-  pFillInfo->slidingTime = slidingTime;
-  pFillInfo->slidingUnit = slidingUnit;
+
+  pFillInfo->interval.interval = slidingTime;
+  pFillInfo->interval.intervalUnit = slidingUnit;
+  pFillInfo->interval.sliding = slidingTime;
+  pFillInfo->interval.slidingUnit = slidingUnit;
 
   pFillInfo->pData = malloc(POINTER_BYTES * numOfCols);
-  
-  int32_t rowsize = 0;
-  for (int32_t i = 0; i < numOfCols; ++i) {
-    int32_t bytes = pFillInfo->pFillCol[i].col.bytes;
-    pFillInfo->pData[i] = calloc(1, bytes * capacity);
-    
-    rowsize += bytes;
-  }
-  
   if (numOfTags > 0) {
-    pFillInfo->pTags = calloc(1, pFillInfo->numOfTags * POINTER_BYTES + rowsize);
+    pFillInfo->pTags = calloc(pFillInfo->numOfTags, sizeof(SFillTagColInfo));
+    for(int32_t i = 0; i < numOfTags; ++i) {
+      pFillInfo->pTags[i].col.colId = -2;
+    }
   }
-  
+
+  int32_t rowsize = 0;
+  int32_t k = 0;
+  for (int32_t i = 0; i < numOfCols; ++i) {
+    SFillColInfo* pColInfo = &pFillInfo->pFillCol[i];
+    pFillInfo->pData[i] = calloc(1, pColInfo->col.bytes * capacity);
+
+    if (TSDB_COL_IS_TAG(pColInfo->flag)) {
+      bool exists = false;
+      for(int32_t j = 0; j < k; ++j) {
+        if (pFillInfo->pTags[j].col.colId == pColInfo->col.colId) {
+          exists = true;
+          break;
+        }
+      }
+
+      if (!exists) {
+        pFillInfo->pTags[k].col.colId = pColInfo->col.colId;
+        pFillInfo->pTags[k].tagVal = calloc(1, pColInfo->col.bytes);
+
+        k += 1;
+      }
+    }
+    rowsize += pColInfo->col.bytes;
+  }
+
   pFillInfo->rowSize = rowsize;
   pFillInfo->capacityInRows = capacity;
   
@@ -89,21 +111,15 @@ void* taosDestoryFillInfo(SFillInfo* pFillInfo) {
   return NULL;
 }
 
-static TSKEY taosGetRevisedEndKey(TSKEY ekey, int32_t order, int64_t timeInterval, int8_t slidingTimeUnit, int8_t precision) {
-  if (order == TSDB_ORDER_ASC) {
-    return ekey;
-  } else {
-    return taosGetIntervalStartTimestamp(ekey, timeInterval, timeInterval, slidingTimeUnit, precision);
-  }
-}
-
 void taosFillSetStartInfo(SFillInfo* pFillInfo, int32_t numOfRows, TSKEY endKey) {
   if (pFillInfo->fillType == TSDB_FILL_NONE) {
     return;
   }
 
-  pFillInfo->endKey = taosGetRevisedEndKey(endKey, pFillInfo->order, pFillInfo->slidingTime, pFillInfo->slidingUnit,
-      pFillInfo->precision);
+  pFillInfo->endKey = endKey;
+  if (pFillInfo->order != TSDB_ORDER_ASC) {
+    pFillInfo->endKey = taosTimeTruncate(endKey, &pFillInfo->interval, pFillInfo->precision);
+  }
 
   pFillInfo->rowIdx    = 0;
   pFillInfo->numOfRows = numOfRows;
@@ -129,16 +145,21 @@ void taosFillCopyInputDataFromFilePage(SFillInfo* pFillInfo, tFilePage** pInput)
 
 void taosFillCopyInputDataFromOneFilePage(SFillInfo* pFillInfo, tFilePage* pInput) {
   assert(pFillInfo->numOfRows == pInput->num);
-  int32_t t = 0;
-  
+
   for(int32_t i = 0; i < pFillInfo->numOfCols; ++i) {
     SFillColInfo* pCol = &pFillInfo->pFillCol[i];
-    
-    char* s = pInput->data + pCol->col.offset * pInput->num;
-    memcpy(pFillInfo->pData[i], s, pInput->num * pCol->col.bytes);
-    
-    if (pCol->flag == TSDB_COL_TAG) {  // copy the tag value
-      memcpy(pFillInfo->pTags[t++], pFillInfo->pData[i], pCol->col.bytes);
+
+    char* data = pInput->data + pCol->col.offset * pInput->num;
+    memcpy(pFillInfo->pData[i], data, (size_t)(pInput->num * pCol->col.bytes));
+
+    if (TSDB_COL_IS_TAG(pCol->flag)) {  // copy the tag value to tag value buffer
+      for (int32_t j = 0; j < pFillInfo->numOfTags; ++j) {
+        SFillTagColInfo* pTag = &pFillInfo->pTags[j];
+        if (pTag->col.colId == pCol->col.colId) {
+          memcpy(pTag->tagVal, data, pCol->col.bytes);
+          break;
+        }
+      }
     }
   }
 }
@@ -148,22 +169,34 @@ int64_t getFilledNumOfRes(SFillInfo* pFillInfo, TSKEY ekey, int32_t maxNumOfRows
 
   int32_t numOfRows = taosNumOfRemainRows(pFillInfo);
 
-  TSKEY ekey1 = taosGetRevisedEndKey(ekey, pFillInfo->order, pFillInfo->slidingTime, pFillInfo->slidingUnit,
-      pFillInfo->precision);
+  TSKEY ekey1 = ekey;
+  if (pFillInfo->order != TSDB_ORDER_ASC) {
+    pFillInfo->endKey = taosTimeTruncate(ekey, &pFillInfo->interval, pFillInfo->precision);
+  }
 
   int64_t numOfRes = -1;
   if (numOfRows > 0) {  // still fill gap within current data block, not generating data after the result set.
     TSKEY lastKey = tsList[pFillInfo->numOfRows - 1];
-
-    numOfRes = (int64_t)(labs(lastKey - pFillInfo->start) / pFillInfo->slidingTime) + 1;
+    numOfRes = taosTimeCountInterval(
+      lastKey,
+      pFillInfo->start,
+      pFillInfo->interval.sliding,
+      pFillInfo->interval.slidingUnit,
+      pFillInfo->precision);
+    numOfRes += 1;
     assert(numOfRes >= numOfRows);
   } else { // reach the end of data
     if ((ekey1 < pFillInfo->start && FILL_IS_ASC_FILL(pFillInfo)) ||
         (ekey1 > pFillInfo->start && !FILL_IS_ASC_FILL(pFillInfo))) {
       return 0;
-    } else {  // the numOfRes rows are all filled with specified policy
-      numOfRes = (labs(ekey1 - pFillInfo->start) / pFillInfo->slidingTime) + 1;
     }
+    numOfRes = taosTimeCountInterval(
+      ekey1,
+      pFillInfo->start,
+      pFillInfo->interval.sliding,
+      pFillInfo->interval.slidingUnit,
+      pFillInfo->precision);
+    numOfRes += 1;
   }
 
   return (numOfRes > maxNumOfRows) ? maxNumOfRows : numOfRes;
@@ -185,34 +218,34 @@ static double linearInterpolationImpl(double v1, double v2, double k1, double k2
 int taosDoLinearInterpolation(int32_t type, SPoint* point1, SPoint* point2, SPoint* point) {
   switch (type) {
     case TSDB_DATA_TYPE_INT: {
-      *(int32_t*)point->val = (int32_t) linearInterpolationImpl(*(int32_t*)point1->val, *(int32_t*)point2->val, point1->key,
-                                                        point2->key, point->key);
+      *(int32_t*)point->val = (int32_t)linearInterpolationImpl(*(int32_t*)point1->val, *(int32_t*)point2->val, (double)point1->key,
+                                                              (double)point2->key, (double)point->key);
       break;
     }
     case TSDB_DATA_TYPE_FLOAT: {
-      *(float*)point->val =
-          linearInterpolationImpl(*(float*)point1->val, *(float*)point2->val, point1->key, point2->key, point->key);
+      *(float*)point->val = (float)
+        linearInterpolationImpl(*(float*)point1->val, *(float*)point2->val, (double)point1->key, (double)point2->key, (double)point->key);
       break;
     };
     case TSDB_DATA_TYPE_DOUBLE: {
       *(double*)point->val =
-          linearInterpolationImpl(*(double*)point1->val, *(double*)point2->val, point1->key, point2->key, point->key);
+        linearInterpolationImpl(*(double*)point1->val, *(double*)point2->val, (double)point1->key, (double)point2->key, (double)point->key);
       break;
     };
     case TSDB_DATA_TYPE_TIMESTAMP:
     case TSDB_DATA_TYPE_BIGINT: {
-      *(int64_t*)point->val = (int64_t) linearInterpolationImpl(*(int64_t*)point1->val, *(int64_t*)point2->val, point1->key,
-                                                        point2->key, point->key);
+      *(int64_t*)point->val = (int64_t)linearInterpolationImpl((double)(*(int64_t*)point1->val), (double)(*(int64_t*)point2->val), (double)point1->key,
+        (double)point2->key, (double)point->key);
       break;
     };
     case TSDB_DATA_TYPE_SMALLINT: {
-      *(int16_t*)point->val = (int16_t) linearInterpolationImpl(*(int16_t*)point1->val, *(int16_t*)point2->val, point1->key,
-                                                        point2->key, point->key);
+      *(int16_t*)point->val = (int16_t)linearInterpolationImpl(*(int16_t*)point1->val, *(int16_t*)point2->val, (double)point1->key,
+        (double)point2->key, (double)point->key);
       break;
     };
     case TSDB_DATA_TYPE_TINYINT: {
       *(int8_t*) point->val = (int8_t)
-          linearInterpolationImpl(*(int8_t*)point1->val, *(int8_t*)point2->val, point1->key, point2->key, point->key);
+        linearInterpolationImpl(*(int8_t*)point1->val, *(int8_t*)point2->val, (double)point1->key, (double)point2->key, (double)point->key);
       break;
     };
     default: {
@@ -224,22 +257,31 @@ int taosDoLinearInterpolation(int32_t type, SPoint* point1, SPoint* point2, SPoi
   return 0;
 }
 
-static void setTagsValue(SFillInfo* pColInfo, tFilePage** data, char** pTags, int32_t start, int32_t num) {
-  for (int32_t j = 0, i = start; i < pColInfo->numOfCols; ++i, ++j) {
-    SFillColInfo* pCol = &pColInfo->pFillCol[i];
-    
-    char* val1 = elePtrAt(data[i]->data, pCol->col.bytes, num);
-    assignVal(val1, pTags[j], pCol->col.bytes, pCol->col.type);
+static void setTagsValue(SFillInfo* pFillInfo, tFilePage** data, int32_t num) {
+  for(int32_t j = 0; j < pFillInfo->numOfCols; ++j) {
+    SFillColInfo* pCol = &pFillInfo->pFillCol[j];
+    if (TSDB_COL_IS_NORMAL_COL(pCol->flag)) {
+      continue;
+    }
+
+    char* val1 = elePtrAt(data[j]->data, pCol->col.bytes, num);
+
+    for(int32_t i = 0; i < pFillInfo->numOfTags; ++i) {
+      SFillTagColInfo* pTag = &pFillInfo->pTags[i];
+      if (pTag->col.colId == pCol->col.colId) {
+        assignVal(val1, pTag->tagVal, pCol->col.bytes, pCol->col.type);
+        break;
+      }
+    }
   }
 }
 
-static void doInterpoResultImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t* num, char** srcData,
-                                int64_t ts, char** pTags, bool outOfBound) {
+static void doFillResultImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t* num, char** srcData, int64_t ts,
+                             bool outOfBound) {
   char* prevValues = pFillInfo->prevValues;
   char* nextValues = pFillInfo->nextValues;
 
   SPoint point1, point2, point;
-
   int32_t step = GET_FORWARD_DIRECTION_FACTOR(pFillInfo->order);
 
   char* val = elePtrAt(data[0]->data, TSDB_KEYSIZE, *num);
@@ -279,7 +321,7 @@ static void doInterpoResultImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t*
       }
     }
 
-    setTagsValue(pFillInfo, data, pTags, numOfValCols, *num);
+    setTagsValue(pFillInfo, data, *num);
   } else if (pFillInfo->fillType == TSDB_FILL_LINEAR) {
     // TODO : linear interpolation supports NULL value
     if (prevValues != NULL && !outOfBound) {
@@ -304,7 +346,7 @@ static void doInterpoResultImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t*
         taosDoLinearInterpolation(type, &point1, &point2, &point);
       }
 
-      setTagsValue(pFillInfo, data, pTags, numOfValCols, *num);
+      setTagsValue(pFillInfo, data, *num);
 
     } else {
       for (int32_t i = 1; i < numOfValCols; ++i) {
@@ -319,7 +361,7 @@ static void doInterpoResultImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t*
         }
       }
 
-      setTagsValue(pFillInfo, data, pTags, numOfValCols, *num);
+      setTagsValue(pFillInfo, data, *num);
   
     }
   } else { /* fill the default value */
@@ -330,10 +372,10 @@ static void doInterpoResultImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t*
       assignVal(val1, (char*)&pCol->fillVal.i, pCol->col.bytes, pCol->col.type);
     }
 
-    setTagsValue(pFillInfo, data, pTags, numOfValCols, *num);
+    setTagsValue(pFillInfo, data, *num);
   }
 
-  pFillInfo->start += (pFillInfo->slidingTime * step);
+  pFillInfo->start = taosTimeAdd(pFillInfo->start, pFillInfo->interval.sliding * step, pFillInfo->interval.slidingUnit, pFillInfo->precision);
   pFillInfo->numOfCurrent++;
 
   (*num) += 1;
@@ -364,17 +406,14 @@ int32_t generateDataBlockImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t nu
   char** nextValues = &pFillInfo->nextValues;
 
   int32_t numOfTags = pFillInfo->numOfTags;
-  char**  pTags = pFillInfo->pTags;
-
   int32_t step = GET_FORWARD_DIRECTION_FACTOR(pFillInfo->order);
-
   if (numOfRows == 0) {
     /*
      * These data are generated according to fill strategy, since the current timestamp is out of time window of
      * real result set. Note that we need to keep the direct previous result rows, to generated the filled data.
      */
     while (num < outputRows) {
-      doInterpoResultImpl(pFillInfo, data, &num, srcData, pFillInfo->start, pTags, true);
+      doFillResultImpl(pFillInfo, data, &num, srcData, pFillInfo->start, true);
     }
     
     pFillInfo->numOfTotal += pFillInfo->numOfCurrent;
@@ -401,12 +440,11 @@ int32_t generateDataBlockImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t nu
         
         while (((pFillInfo->start < ts && FILL_IS_ASC_FILL(pFillInfo)) ||
                 (pFillInfo->start > ts && !FILL_IS_ASC_FILL(pFillInfo))) && num < outputRows) {
-          doInterpoResultImpl(pFillInfo, data, &num, srcData, ts, pTags, false);
+          doFillResultImpl(pFillInfo, data, &num, srcData, ts, false);
         }
 
         /* output buffer is full, abort */
-        if ((num == outputRows && FILL_IS_ASC_FILL(pFillInfo)) ||
-            (num < 0 && !FILL_IS_ASC_FILL(pFillInfo))) {
+        if ((num == outputRows && FILL_IS_ASC_FILL(pFillInfo)) || (num < 0 && !FILL_IS_ASC_FILL(pFillInfo))) {
           pFillInfo->numOfTotal += pFillInfo->numOfCurrent;
           return outputRows;
         }
@@ -415,10 +453,12 @@ int32_t generateDataBlockImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t nu
         initBeforeAfterDataBuf(pFillInfo, prevValues);
         
         // assign rows to dst buffer
-        int32_t i = 0;
-        for (; i < pFillInfo->numOfCols - numOfTags; ++i) {
+        for (int32_t i = 0; i < pFillInfo->numOfCols; ++i) {
           SFillColInfo* pCol = &pFillInfo->pFillCol[i];
-          
+          if (TSDB_COL_IS_TAG(pCol->flag)) {
+            continue;
+          }
+
           char* val1 = elePtrAt(data[i]->data, pCol->col.bytes, num);
           char* src  = elePtrAt(srcData[i], pCol->col.bytes, pFillInfo->rowIdx);
           
@@ -440,10 +480,12 @@ int32_t generateDataBlockImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t nu
         }
 
         // set the tag value for final result
-        setTagsValue(pFillInfo, data, pTags, pFillInfo->numOfCols - numOfTags, num);
+        setTagsValue(pFillInfo, data, num);
 
-        pFillInfo->start += (pFillInfo->slidingTime * step);
+        pFillInfo->start = taosTimeAdd(pFillInfo->start, pFillInfo->interval.sliding*step, pFillInfo->interval.slidingUnit, pFillInfo->precision);
         pFillInfo->rowIdx += 1;
+
+        pFillInfo->numOfCurrent +=1;
         num += 1;
       }
 
@@ -467,7 +509,7 @@ int32_t generateDataBlockImpl(SFillInfo* pFillInfo, tFilePage** data, int32_t nu
 int64_t taosGenerateDataBlock(SFillInfo* pFillInfo, tFilePage** output, int32_t capacity) {
   int32_t remain = taosNumOfRemainRows(pFillInfo);  // todo use iterator?
 
-  int32_t rows = getFilledNumOfRes(pFillInfo, pFillInfo->endKey, capacity);
+  int32_t rows = (int32_t)getFilledNumOfRes(pFillInfo, pFillInfo->endKey, capacity);
   int32_t numOfRes = generateDataBlockImpl(pFillInfo, output, remain, rows, pFillInfo->pData);
   assert(numOfRes == rows);
   

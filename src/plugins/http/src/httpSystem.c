@@ -26,9 +26,10 @@
 #include "httpServer.h"
 #include "httpResp.h"
 #include "httpHandle.h"
-#include "gcHandle.h"
-#include "restHandle.h"
-#include "tgHandle.h"
+#include "httpQueue.h"
+#include "httpGcHandle.h"
+#include "httpRestHandle.h"
+#include "httpTgHandle.h"
 
 #ifndef _ADMIN
 void adminInitHandle(HttpServer* pServer) {}
@@ -36,9 +37,9 @@ void opInitHandle(HttpServer* pServer) {}
 #endif
 
 HttpServer tsHttpServer;
-void taosInitNote(int numOfNoteLines, int maxNotes, char* lable);
+void taosInitNote(int32_t numOfNoteLines, int32_t maxNotes, char* lable);
 
-int httpInitSystem() {
+int32_t httpInitSystem() {
   strcpy(tsHttpServer.label, "rest");
   tsHttpServer.serverIp = 0;
   tsHttpServer.serverPort = tsHttpPort;
@@ -59,11 +60,16 @@ int httpInitSystem() {
   return 0;
 }
 
-int httpStartSystem() {
+int32_t httpStartSystem() {
   httpInfo("start http server ...");
 
   if (tsHttpServer.status != HTTP_SERVER_INIT) {
     httpError("http server is already started");
+    return -1;
+  }
+
+  if (!httpInitResultQueue()) {
+    httpError("http init result queue failed");
     return -1;
   }
 
@@ -98,6 +104,8 @@ void httpCleanUpSystem() {
   httpCleanUpConnect();
   httpCleanupContexts();
   httpCleanUpSessions();
+  httpCleanupResultQueue();
+
   pthread_mutex_destroy(&tsHttpServer.serverMutex);
   taosTFree(tsHttpServer.pThreads);
   tsHttpServer.pThreads = NULL;

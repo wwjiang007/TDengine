@@ -27,41 +27,43 @@
 #include "tsync.h"
 #include "syncInt.h"
 
-static void arbSignalHandler(int32_t signum, siginfo_t *sigInfo, void *context);
-static void arbProcessIncommingConnection(int connFd, uint32_t sourceIp);
-static void arbProcessBrokenLink(void *param);
-static int  arbProcessPeerMsg(void *param, void *buffer);
-static sem_t    tsArbSem;
+static void     arbSignalHandler(int32_t signum, siginfo_t *sigInfo, void *context);
+static void     arbProcessIncommingConnection(int connFd, uint32_t sourceIp);
+static void     arbProcessBrokenLink(void *param);
+static int      arbProcessPeerMsg(void *param, void *buffer);
+static tsem_t   tsArbSem;
 static ttpool_h tsArbTcpPool;
 
 typedef struct {
-  char  id[TSDB_EP_LEN+24];
+  char  id[TSDB_EP_LEN + 24];
   int   nodeFd;
   void *pConn;
 } SNodeConn;
 
 int main(int argc, char *argv[]) {
-  char     arbLogPath[TSDB_FILENAME_LEN + 16] = {0};
+  char arbLogPath[TSDB_FILENAME_LEN + 16] = {0};
 
-  for (int i=1; i<argc; ++i) {
-    if (strcmp(argv[i], "-p")==0 && i < argc-1) {
-      tsServerPort = atoi(argv[++i]);
-    } else if (strcmp(argv[i], "-d")==0 && i < argc-1) {
+  for (int i = 1; i < argc; ++i) {
+    if (strcmp(argv[i], "-p") == 0 && i < argc - 1) {
+      tsArbitratorPort = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "-d") == 0 && i < argc - 1) {
       debugFlag = atoi(argv[++i]);
-    } else if (strcmp(argv[i], "-g")==0 && i < argc-1) {
-      if (strlen(argv[++i]) > TSDB_FILENAME_LEN) continue; 
+    } else if (strcmp(argv[i], "-g") == 0 && i < argc - 1) {
+      if (strlen(argv[++i]) > TSDB_FILENAME_LEN) continue;
       tstrncpy(arbLogPath, argv[i], sizeof(arbLogPath));
     } else {
       printf("\nusage: %s [options] \n", argv[0]);
-      printf("  [-p port]: server port number, default is:%d\n", tsServerPort);
-      printf("  [-d debugFlag]: debug flag, default:%d\n", debugFlag);
-      printf("  [-g logFilePath]: log file pathe, default:%s\n", arbLogPath);
+      printf("  [-p port]: arbitrator server port number, default is:%d\n", tsServerPort + TSDB_PORT_ARBITRATOR);
+      printf("  [-d debugFlag]: debug flag, option 131 | 135 | 143, default:0\n");
+      printf("  [-g logFilePath]: log file pathe, default:/arbitrator.log\n");
       printf("  [-h help]: print out this help\n\n");
       exit(0);
     }
   }
-  
- if (sem_init(&tsArbSem, 0, 0) != 0) {
+
+  sDebugFlag = debugFlag;
+
+  if (tsem_init(&tsArbSem, 0, 0) != 0) {
     printf("failed to create exit semphore\n");
     exit(EXIT_FAILURE);
   }
@@ -79,28 +81,25 @@ int main(int argc, char *argv[]) {
   taosInitLog(arbLogPath, 1000000, 10);
 
   taosGetFqdn(tsNodeFqdn);
-  tsSyncPort = tsServerPort + TSDB_PORT_SYNC;
 
   SPoolInfo info;
   info.numOfThreads = 1;
   info.serverIp = 0;
-  info.port = tsSyncPort;
+  info.port = tsArbitratorPort;
   info.bufferSize = 640000;
   info.processBrokenLink = arbProcessBrokenLink;
   info.processIncomingMsg = arbProcessPeerMsg;
   info.processIncomingConn = arbProcessIncommingConnection;
   tsArbTcpPool = taosOpenTcpThreadPool(&info);
-  
+
   if (tsArbTcpPool == NULL) {
-   sDebug("failed to open TCP thread pool, exit...");
-   return -1;
+    sDebug("failed to open TCP thread pool, exit...");
+    return -1;
   }
 
-  sInfo("TAOS arbitrator: %s:%d is running", tsNodeFqdn, tsServerPort);
+  sInfo("TAOS arbitrator: %s:%d is running", tsNodeFqdn, tsArbitratorPort);
 
-  for (int res = sem_wait(&tsArbSem); res != 0; res = sem_wait(&tsArbSem)) {
-    if (res != EINTR) break;
-  }
+  tsem_wait(&tsArbSem);
 
   taosCloseTcpThreadPool(tsArbTcpPool);
   sInfo("TAOS arbitrator is shut down\n");
@@ -109,9 +108,8 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
-static void arbProcessIncommingConnection(int connFd, uint32_t sourceIp)
-{
-  char  ipstr[24];
+static void arbProcessIncommingConnection(int connFd, uint32_t sourceIp) {
+  char ipstr[24];
   tinet_ntoa(ipstr, sourceIp);
   sDebug("peer TCP connection from ip:%s", ipstr);
 
@@ -122,15 +120,16 @@ static void arbProcessIncommingConnection(int connFd, uint32_t sourceIp)
     return;
   }
 
-  SNodeConn *pNode = (SNodeConn *) calloc(sizeof(SNodeConn), 1);
+  SNodeConn *pNode = (SNodeConn *)calloc(sizeof(SNodeConn), 1);
   if (pNode == NULL) {
     sError("failed to allocate memory(%s)", strerror(errno));
     taosCloseSocket(connFd);
     return;
   }
 
-  snprintf(pNode->id, sizeof(pNode->id), "vgId:%d peer:%s:%d", firstPkt.sourceId, firstPkt.fqdn, firstPkt.port); 
-  if (firstPkt.syncHead.vgId) {  
+  firstPkt.fqdn[sizeof(firstPkt.fqdn) - 1] = 0;
+  snprintf(pNode->id, sizeof(pNode->id), "vgId:%d peer:%s:%d", firstPkt.sourceId, firstPkt.fqdn, firstPkt.port);
+  if (firstPkt.syncHead.vgId) {
     sDebug("%s, vgId in head is not zero, close the connection", pNode->id);
     taosTFree(pNode);
     taosCloseSocket(connFd);
@@ -151,12 +150,11 @@ static void arbProcessBrokenLink(void *param) {
   taosTFree(pNode);
 }
 
-static int arbProcessPeerMsg(void *param, void *buffer)
-{
-  SNodeConn  *pNode = param;
-  SSyncHead   head;
-  int         bytes = 0;
-  char       *cont = (char *)buffer;
+static int arbProcessPeerMsg(void *param, void *buffer) {
+  SNodeConn *pNode = param;
+  SSyncHead  head;
+  int        bytes = 0;
+  char *     cont = (char *)buffer;
 
   int hlen = taosReadMsg(pNode->nodeFd, &head, sizeof(head));
   if (hlen != sizeof(head)) {
@@ -175,7 +173,6 @@ static int arbProcessPeerMsg(void *param, void *buffer)
 }
 
 static void arbSignalHandler(int32_t signum, siginfo_t *sigInfo, void *context) {
-
   struct sigaction act = {{0}};
   act.sa_handler = SIG_IGN;
   sigaction(SIGTERM, &act, NULL);
@@ -185,6 +182,5 @@ static void arbSignalHandler(int32_t signum, siginfo_t *sigInfo, void *context) 
   sInfo("shut down signal is %d, sender PID:%d", signum, sigInfo->si_pid);
 
   // inform main thread to exit
-  sem_post(&tsArbSem);
+  tsem_post(&tsArbSem);
 }
-

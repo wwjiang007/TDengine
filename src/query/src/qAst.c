@@ -44,7 +44,7 @@
  * ver 0.3, pipeline filter in the form of: (a+2)/9 > 14
  *
  */
-static tExprNode *tExprNodeCreate(SSchema *pSchema, int32_t numOfCols, SSQLToken *pToken);
+static tExprNode *tExprNodeCreate(SSchema *pSchema, int32_t numOfCols, SStrToken *pToken);
 
 static tExprNode *createSyntaxTree(SSchema *pSchema, int32_t numOfCols, char *str, int32_t *i);
 static void       destroySyntaxTree(tExprNode *);
@@ -103,7 +103,7 @@ static void reviseBinaryExprIfNecessary(tExprNode **pLeft, tExprNode **pRight, u
   }
 }
 
-static tExprNode *tExprNodeCreate(SSchema *pSchema, int32_t numOfCols, SSQLToken *pToken) {
+static tExprNode *tExprNodeCreate(SSchema *pSchema, int32_t numOfCols, SStrToken *pToken) {
   /* if the token is not a value, return false */
   if (pToken->type == TK_RP || (pToken->type != TK_INTEGER && pToken->type != TK_FLOAT && pToken->type != TK_ID &&
                                 pToken->type != TK_TBNAME && pToken->type != TK_STRING && pToken->type != TK_BOOL)) {
@@ -117,7 +117,7 @@ static tExprNode *tExprNodeCreate(SSchema *pSchema, int32_t numOfCols, SSQLToken
     int32_t i = 0;
     if (pToken->type == TK_ID) {
       do {
-        SSQLToken tableToken = {0};
+        SStrToken tableToken = {0};
         extractTableNameFromToken(pToken, &tableToken);
 
         size_t len = strlen(pSchema[i].name);
@@ -157,7 +157,7 @@ static tExprNode *tExprNodeCreate(SSchema *pSchema, int32_t numOfCols, SSQLToken
   return pNode;
 }
 
-uint8_t getBinaryExprOptr(SSQLToken *pToken) {
+uint8_t getBinaryExprOptr(SStrToken *pToken) {
   switch (pToken->type) {
     case TK_LT:
       return TSDB_RELATION_LESS;
@@ -188,6 +188,10 @@ uint8_t getBinaryExprOptr(SSQLToken *pToken) {
       return TSDB_BINARY_OP_REMAINDER;
     case TK_LIKE:
       return TSDB_RELATION_LIKE;
+    case TK_ISNULL:
+      return TSDB_RELATION_ISNULL;
+    case TK_NOTNULL:
+      return TSDB_RELATION_NOTNULL;
     default: { return 0; }
   }
 }
@@ -234,7 +238,7 @@ uint8_t isQueryOnPrimaryKey(const char *primaryColumnName, const tExprNode *pLef
 }
 
 static tExprNode *createSyntaxTree(SSchema *pSchema, int32_t numOfCols, char *str, int32_t *i) {
-  SSQLToken t0 = tStrGetToken(str, i, false, 0, NULL);
+  SStrToken t0 = tStrGetToken(str, i, false, 0, NULL);
   if (t0.n == 0) {
     return NULL;
   }
@@ -427,8 +431,9 @@ static void tQueryIndexColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, SArr
         if (ret != 0) {
           break;
         }
-        
-        taosArrayPush(result, SL_GET_NODE_DATA(pNode));
+
+        STableKeyInfo info = {.pTable = *(void**)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
+        taosArrayPush(result, &info);
       }
     } else if (optr == TSDB_RELATION_GREATER || optr == TSDB_RELATION_GREATER_EQUAL) { // greater equal
       bool comp = true;
@@ -445,7 +450,8 @@ static void tQueryIndexColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, SArr
         if (ret == 0 && optr == TSDB_RELATION_GREATER) {
           continue;
         } else {
-          taosArrayPush(result, SL_GET_NODE_DATA(pNode));
+          STableKeyInfo info = {.pTable = *(void**)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
+          taosArrayPush(result, &info);
           comp = false;
         }
       }
@@ -458,8 +464,9 @@ static void tQueryIndexColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, SArr
         if (comp) {
           continue;
         }
-        
-        taosArrayPush(result, SL_GET_NODE_DATA(pNode));
+
+        STableKeyInfo info = {.pTable = *(void**)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
+        taosArrayPush(result, &info);
       }
       
       tSkipListDestroyIter(iter);
@@ -472,8 +479,9 @@ static void tQueryIndexColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, SArr
         if (comp) {
           continue;
         }
-  
-        taosArrayPush(result, SL_GET_NODE_DATA(pNode));
+
+        STableKeyInfo info = {.pTable = *(void**)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
+        taosArrayPush(result, &info);
       }
   
     } else {
@@ -482,27 +490,42 @@ static void tQueryIndexColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, SArr
   } else {
     int32_t optr = cond.end ? cond.end->optr : TSDB_RELATION_INVALID;
     if (optr == TSDB_RELATION_LESS || optr == TSDB_RELATION_LESS_EQUAL) {
-      bool comp = true;
+      bool    comp = true;
       int32_t ret = 0;
-      
-      while(tSkipListIterNext(iter)) {
-        SSkipListNode* pNode = tSkipListIterGet(iter);
-      
+
+      while (tSkipListIterNext(iter)) {
+        SSkipListNode *pNode = tSkipListIterGet(iter);
+
         if (comp) {
           ret = pQueryInfo->compare(SL_GET_NODE_KEY(pSkipList, pNode), cond.end->v);
           assert(ret <= 0);
         }
-        
+
         if (ret == 0 && optr == TSDB_RELATION_LESS) {
           continue;
         } else {
-          taosArrayPush(result, SL_GET_NODE_DATA(pNode));
+          STableKeyInfo info = {.pTable = *(void **)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
+          taosArrayPush(result, &info);
           comp = false;  // no need to compare anymore
+        }
+      }
+    } else {
+      assert(pQueryInfo->optr == TSDB_RELATION_ISNULL || pQueryInfo->optr == TSDB_RELATION_NOTNULL);
+
+      while (tSkipListIterNext(iter)) {
+        SSkipListNode *pNode = tSkipListIterGet(iter);
+
+        bool isnull = isNull(SL_GET_NODE_KEY(pSkipList, pNode), pQueryInfo->sch.type);
+        if ((pQueryInfo->optr == TSDB_RELATION_ISNULL && isnull) ||
+            (pQueryInfo->optr == TSDB_RELATION_NOTNULL && (!isnull))) {
+          STableKeyInfo info = {.pTable = *(void **)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
+          taosArrayPush(result, &info);
         }
       }
     }
   }
-  free(cond.start); 
+
+  free(cond.start);
   free(cond.end);
   tSkipListDestroyIter(iter);
 }
@@ -623,9 +646,7 @@ static bool filterItem(tExprNode *pExpr, const void *pItem, SExprTraverseSupp *p
   }
 
   // handle the leaf node
-  assert(pLeft->nodeType == TSQL_NODE_COL && pRight->nodeType == TSQL_NODE_VALUE);
   param->setupInfoFn(pExpr, param->pExtInfo);
-
   return param->nodeFilterFn(pItem, pExpr->_node.info);
 }
 
@@ -677,6 +698,7 @@ static void tQueryIndexlessColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, 
     char *         pData = SL_GET_NODE_DATA(pNode);
 
     tstr *name = (tstr*) tsdbGetTableName(*(void**) pData);
+
     // todo speed up by using hash
     if (pQueryInfo->sch.colId == TSDB_TBNAME_COLUMN_INDEX) {
       if (pQueryInfo->optr == TSDB_RELATION_IN) {
@@ -689,7 +711,8 @@ static void tQueryIndexlessColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, 
     }
 
     if (addToResult) {
-      taosArrayPush(res, pData);
+      STableKeyInfo info = {.pTable = *(void**)pData, .lastKey = TSKEY_INITIAL_VAL};
+      taosArrayPush(res, &info);
     }
   }
 
@@ -707,7 +730,7 @@ void tExprTreeTraverse(tExprNode *pExpr, SSkipList *pSkipList, SArray *result, S
 
   // column project
   if (pLeft->nodeType != TSQL_NODE_EXPR && pRight->nodeType != TSQL_NODE_EXPR) {
-    assert(pLeft->nodeType == TSQL_NODE_COL && pRight->nodeType == TSQL_NODE_VALUE);
+    assert(pLeft->nodeType == TSQL_NODE_COL && (pRight->nodeType == TSQL_NODE_VALUE || pRight->nodeType == TSQL_NODE_DUMMY));
 
     param->setupInfoFn(pExpr, param->pExtInfo);
     if (pSkipList == NULL) {
@@ -716,7 +739,7 @@ void tExprTreeTraverse(tExprNode *pExpr, SSkipList *pSkipList, SArray *result, S
     }
 
     tQueryInfo *pQueryInfo = pExpr->_node.info;
-    if (pQueryInfo->sch.colId == PRIMARYKEY_TIMESTAMP_COL_INDEX && pQueryInfo->optr != TSDB_RELATION_LIKE) {
+    if (pQueryInfo->indexed && pQueryInfo->optr != TSDB_RELATION_LIKE) {
       tQueryIndexColumn(pSkipList, pQueryInfo, result);
     } else {
       tQueryIndexlessColumn(pSkipList, pQueryInfo, result, param->nodeFilterFn);
@@ -744,6 +767,7 @@ void tExprTreeTraverse(tExprNode *pExpr, SSkipList *pSkipList, SArray *result, S
       assert(taosArrayGetSize(result) == 0);
       tSQLBinaryTraverseOnSkipList(pExpr, result, pSkipList, param);
     }
+
     return;
   }
   
@@ -1044,7 +1068,7 @@ tExprNode* exprTreeFromTableName(const char* tbnameCond) {
       } else if (*e == ',') {
         size_t len = e - cond;
         char* p = exception_malloc(len + VARSTR_HEADER_SIZE);
-        STR_WITH_SIZE_TO_VARSTR(p, cond, len);
+        STR_WITH_SIZE_TO_VARSTR(p, cond, (VarDataLenT)len);
         cond += len;
         taosArrayPush(pVal->arr, &p);
       }
@@ -1054,7 +1078,7 @@ tExprNode* exprTreeFromTableName(const char* tbnameCond) {
       size_t len = strlen(cond) + VARSTR_HEADER_SIZE;
       
       char* p = exception_malloc(len);
-      STR_WITH_SIZE_TO_VARSTR(p, cond, len - VARSTR_HEADER_SIZE);
+      STR_WITH_SIZE_TO_VARSTR(p, cond, (VarDataLenT)(len - VARSTR_HEADER_SIZE));
       taosArrayPush(pVal->arr, &p);
     }
 

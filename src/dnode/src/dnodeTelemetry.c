@@ -22,18 +22,26 @@
 #include "tsocket.h"
 #include "tbuffer.h"
 #include "mnode.h"
+#include "mnodeDef.h"
+#include "mnodeDb.h"
+#include "mnodeDnode.h"
 #include "mnodeCluster.h"
+#include "mnodeDnode.h"
+#include "mnodeVgroup.h"
+#include "mnodeMnode.h"
+#include "mnodeTable.h"
 #include "mnodeSdb.h"
+#include "mnodeAcct.h"
 #include "dnode.h"
 #include "dnodeInt.h"
 #include "dnodeTelemetry.h"
 
-static sem_t tsExitSem;
+static tsem_t tsExitSem;
 static pthread_t tsTelemetryThread;
 
 #define TELEMETRY_SERVER "telemetry.taosdata.com"
 #define TELEMETRY_PORT 80
-#define REPORT_INTERVAL 86400
+#define REPORT_INTERVAL 86400 
 
 static void beginObject(SBufferWriter* bw) {
   tbufWriteChar(bw, '{');
@@ -169,19 +177,25 @@ static void addMemoryInfo(SBufferWriter* bw) {
 static void addVersionInfo(SBufferWriter* bw) {
   addStringField(bw, "version", version);
   addStringField(bw, "buildInfo", buildinfo);
-  addStringField(bw, "gitInfo", gitinfo);
-  //addStringField(&bw, "installAt", "2020-08-01T00:00:00Z");
+  addStringField(bw, "gitInfo", gitinfo);  
+  addStringField(bw, "email", tsEmail);  
 }
 
 static void addRuntimeInfo(SBufferWriter* bw) {
-  // addIntField(&bw, "numOfDnode", 1);
-  // addIntField(&bw, "numOfVnode", 1);
-  // addIntField(&bw, "numOfStable", 1);
-  // addIntField(&bw, "numOfTable", 1);
-  // addIntField(&bw, "numOfRows", 1);
-  // addStringField(&bw, "startAt", "2020-08-01T00:00:00Z");
-  // addStringField(&bw, "memoryUsage", "10240 kB");
-  // addStringField(&bw, "diskUsage", "10240 MB");
+  addIntField(bw, "numOfDnode", mnodeGetDnodesNum());
+  addIntField(bw, "numOfMnode", mnodeGetMnodesNum());
+  addIntField(bw, "numOfVgroup", mnodeGetVgroupNum());
+  addIntField(bw, "numOfDatabase", mnodeGetDbNum());
+  addIntField(bw, "numOfSuperTable", mnodeGetSuperTableNum());
+  addIntField(bw, "numOfChildTable", mnodeGetChildTableNum());
+
+  SAcctInfo info;
+  mnodeGetStatOfAllAcct(&info);
+  addIntField(bw, "numOfColumn", info.numOfTimeSeries);
+  addIntField(bw, "numOfPoint", info.totalPoints);
+  addIntField(bw, "totalStorage", info.totalStorage);
+  addIntField(bw, "compStorage", info.compStorage);
+  // addStringField(bw, "installTime", "2020-08-01T00:00:00Z");
 }
 
 static void sendTelemetryReport() {
@@ -220,39 +234,56 @@ static void sendTelemetryReport() {
   taosWriteSocket(fd, tbufGetData(&bw, false), contLen);
   tbufCloseWriter(&bw);
 
-  taosReadSocket(fd, buf, 10); // read something to avoid nginx error 499
+  // read something to avoid nginx error 499
+  if (taosReadSocket(fd, buf, 10) < 0) {
+    dTrace("failed to receive response, reason:%s", strerror(errno));
+  }
   taosCloseSocket(fd);
 }
 
 static void* telemetryThread(void* param) {
-  int timeToWait = 0;
+  struct timespec end = {0};
+  clock_gettime(CLOCK_REALTIME, &end);
+  end.tv_sec += 300; // wait 5 minutes before send first report
+
   while (1) {
-    if (timeToWait <= 0) {
-      if (sdbIsMaster()) {
-        sendTelemetryReport();
-      }
-      timeToWait = REPORT_INTERVAL;
+    if (sem_timedwait(&tsExitSem, &end) == 0) {
+      break;
+    } else if (errno != ETIMEDOUT) {
+      continue;
     }
 
-    int startAt = taosGetTimestampSec();
-    struct timespec timeout = {.tv_sec = 0, .tv_nsec = 0};
-    clock_gettime(CLOCK_REALTIME, &timeout);
-    timeout.tv_sec += timeToWait;
-    if (sem_timedwait(&tsExitSem, &timeout) == 0) {
-      break;
+    if (sdbIsMaster()) {
+      sendTelemetryReport();
     }
-    timeToWait -= (taosGetTimestampSec() - startAt);
+    end.tv_sec += REPORT_INTERVAL;
   }
 
   return NULL;
 }
+
+static void dnodeGetEmail(char* filepath) {
+  int fd = open(filepath, O_RDONLY);
+  if (fd < 0) {
+    return;
+  }
+  
+  if (taosTRead(fd, (void *)tsEmail, TSDB_FQDN_LEN) < 0) {
+    dError("failed to read %d bytes from file %s since %s", TSDB_FQDN_LEN, filepath, strerror(errno));
+  } 
+
+  close(fd);   
+}
+
 
 int32_t dnodeInitTelemetry() {
   if (!tsEnableTelemetryReporting) {
     return 0;
   }
 
-  if (sem_init(&tsExitSem, 0, 0) == -1) {
+  dnodeGetEmail("/usr/local/taos/email");  
+
+  if (tsem_init(&tsExitSem, 0, 0) == -1) {
     // just log the error, it is ok for telemetry to fail
     dTrace("failed to create semaphore for telemetry, reason:%s", strerror(errno));
     return 0;
@@ -277,8 +308,8 @@ void dnodeCleanupTelemetry() {
   }
 
   if (tsTelemetryThread) {
-    sem_post(&tsExitSem);
+    tsem_post(&tsExitSem);
     pthread_join(tsTelemetryThread, NULL);
-    sem_destroy(&tsExitSem);
+    tsem_destroy(&tsExitSem);
   }
 }

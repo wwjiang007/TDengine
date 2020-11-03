@@ -39,7 +39,7 @@ create table D1002 using meters tags ("Beijing.Haidian", 2);
 我们已经知道，可以通过下面这条SQL语句以一分钟为时间窗口、30秒为前向增量统计这些电表的平均电压。
 
 ```sql
-select avg(voltage) from meters interval(1m) sliding(30s)；
+select avg(voltage) from meters interval(1m) sliding(30s);
 ```
 
 每次执行这条语句，都会重新计算所有数据。 
@@ -47,14 +47,14 @@ select avg(voltage) from meters interval(1m) sliding(30s)；
 可以把上面的语句改进成下面的样子，每次使用不同的 `startTime` 并定期执行：
 
 ```sql
-select avg(voltage) from meters where ts > {startTime} interval(1m) sliding(30s)；
+select avg(voltage) from meters where ts > {startTime} interval(1m) sliding(30s);
 ```
 
 这样做没有问题，但TDengine提供了更简单的方法，
 只要在最初的查询语句前面加上 `create table {tableName} as ` 就可以了, 例如：
 
 ```sql
-create table avg_vol as select avg(voltage) from meters interval(1m) sliding(30s)；
+create table avg_vol as select avg(voltage) from meters interval(1m) sliding(30s);
 ```
 
 会自动创建一个名为 `avg_vol` 的新表，然后每隔30秒，TDengine会增量执行 `as` 后面的 SQL 语句，
@@ -80,7 +80,7 @@ taos> select * from avg_vol;
 比如使用下面的SQL创建的连续查询将运行一小时，之后会自动停止。
 
 ```sql
-create table avg_vol as select avg(voltage) from meters where ts > now and ts <= now + 1h interval(1m) sliding(30s)；
+create table avg_vol as select avg(voltage) from meters where ts > now and ts <= now + 1h interval(1m) sliding(30s);
 ```
 
 需要说明的是，上面例子中的 `now` 是指创建连续查询的时间，而不是查询执行的时间，否则，查询就无法自动停止了。 
@@ -119,7 +119,7 @@ taos_consume
 taos_unsubscribe
 ```
 
-这些API的文档请见 [C/C++ 数据订阅接口](connector/#C/C++-Connector)，
+这些API的文档请见 [C/C++ Connector](https://www.taosdata.com/cn/documentation20/connector/)，
 下面仍以智能电表场景为例介绍一下它们的具体用法（超级表和子表结构请参考上一节“连续查询”），
 完整的示例代码可以在 [这里](https://github.com/taosdata/TDengine/blob/master/tests/examples/c/subscribe.c) 找到。
 
@@ -294,6 +294,117 @@ $ taos
 
 这时，因为电流超过了10A，您应该可以看到示例程序将它输出到了屏幕上。
 您可以继续插入一些数据观察示例程序的输出。
+
+### Java 使用数据订阅功能
+
+订阅功能也提供了 Java 开发接口，相关说明请见 [Java Connector](https://www.taosdata.com/cn/documentation20/connector/)。需要注意的是，目前 Java 接口没有提供异步订阅模式，但用户程序可以通过创建 `TimerTask` 等方式达到同样的效果。
+
+下面以一个示例程序介绍其具体使用方法。它所完成的功能与前面介绍的 C 语言示例基本相同，也是订阅数据库中所有电流超过 10A 的记录。 
+
+#### 准备数据
+
+```sql
+# 创建 power 库
+taos> create database power;
+# 切换库
+taos> use power;
+# 创建超级表
+taos> create table meters(ts timestamp, current float, voltage int, phase int) tags(location binary(64), groupId int);
+# 创建表
+taos> create table d1001 using meters tags ("Beijing.Chaoyang", 2);
+taos> create table d1002 using meters tags ("Beijing.Haidian", 2);
+# 插入测试数据
+taos> insert into d1001 values("2020-08-15 12:00:00.000", 12, 220, 1),("2020-08-15 12:10:00.000", 12.3, 220, 2),("2020-08-15 12:20:00.000", 12.2, 220, 1);
+taos> insert into d1002 values("2020-08-15 12:00:00.000", 9.9, 220, 1),("2020-08-15 12:10:00.000", 10.3, 220, 1),("2020-08-15 12:20:00.000", 11.2, 220, 1);
+# 从超级表 meters 查询电流大于 10A 的记录
+taos> select * from meters where current > 10;
+           ts            |    current   |    voltage   |  phase |         location          |   groupid   |
+===========================================================================================================
+ 2020-08-15 12:10:00.000 |    10.30000  |     220      |      1 |      Beijing.Haidian      |           2 |
+ 2020-08-15 12:20:00.000 |    11.20000  |     220      |      1 |      Beijing.Haidian      |           2 |
+ 2020-08-15 12:00:00.000 |    12.00000  |     220      |      1 |      Beijing.Chaoyang     |           2 |
+ 2020-08-15 12:10:00.000 |    12.30000  |     220      |      2 |      Beijing.Chaoyang     |           2 |
+ 2020-08-15 12:20:00.000 |    12.20000  |     220      |      1 |      Beijing.Chaoyang     |           2 |
+Query OK, 5 row(s) in set (0.004896s)
+```
+
+#### 示例程序
+
+```java
+public class SubscribeDemo {
+    private static final String topic = "topic-meter-current-bg-10";
+    private static final String sql = "select * from meters where current > 10";
+
+    public static void main(String[] args) {
+        Connection connection = null;
+        TSDBSubscribe subscribe = null;
+
+        try {
+            Class.forName("com.taosdata.jdbc.TSDBDriver");
+            Properties properties = new Properties();
+            properties.setProperty(TSDBDriver.PROPERTY_KEY_CHARSET, "UTF-8");
+            properties.setProperty(TSDBDriver.PROPERTY_KEY_TIME_ZONE, "UTC-8");
+            String jdbcUrl = "jdbc:TAOS://127.0.0.1:6030/power?user=root&password=taosdata";
+            connection = DriverManager.getConnection(jdbcUrl, properties);
+            subscribe = ((TSDBConnection) connection).subscribe(topic, sql, true); // 创建订阅
+            int count = 0;
+            while (count < 10) {
+                TimeUnit.SECONDS.sleep(1); // 等待1秒，避免频繁调用 consume，给服务端造成压力
+                TSDBResultSet resultSet = subscribe.consume(); // 消费数据
+                if (resultSet == null) {
+                    continue;
+                }
+                ResultSetMetaData metaData = resultSet.getMetaData();
+                while (resultSet.next()) {
+                    int columnCount = metaData.getColumnCount();
+                    for (int i = 1; i <= columnCount; i++) {
+                        System.out.print(metaData.getColumnLabel(i) + ": " + resultSet.getString(i) + "\t");
+                    }
+                    System.out.println();
+                    count++;
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                if (null != subscribe)
+                    subscribe.close(true); // 关闭订阅
+                if (connection != null) 
+                    connection.close(); 
+            } catch (SQLException throwables) {
+                throwables.printStackTrace();
+            }
+        }
+    }
+}
+```
+
+运行示例程序，首先，它会消费符合查询条件的所有历史数据：
+
+```shell
+# java -jar subscribe.jar 
+
+ts: 1597464000000	current: 12.0	voltage: 220	phase: 1	location: Beijing.Chaoyang	groupid : 2
+ts: 1597464600000	current: 12.3	voltage: 220	phase: 2	location: Beijing.Chaoyang	groupid : 2
+ts: 1597465200000	current: 12.2	voltage: 220	phase: 1	location: Beijing.Chaoyang	groupid : 2
+ts: 1597464600000	current: 10.3	voltage: 220	phase: 1	location: Beijing.Haidian	groupid : 2
+ts: 1597465200000	current: 11.2	voltage: 220	phase: 1	location: Beijing.Haidian	groupid : 2
+```
+
+接着，使用 taos 客户端向表中新增一条数据：
+
+```sql
+# taos
+taos> use power;
+taos> insert into d1001 values("2020-08-15 12:40:00.000", 12.4, 220, 1);
+```
+
+因为这条数据的电流大于10A，示例程序会将其消费：
+
+```shell
+ts: 1597466400000	current: 12.4	voltage: 220	phase: 1	location: Beijing.Chaoyang	groupid: 2
+```
 
 
 ## 缓存(Cache)

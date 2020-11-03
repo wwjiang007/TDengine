@@ -25,19 +25,33 @@
 #include "taosdef.h"
 #include "taoserror.h"
 #include "tglobal.h"
+#include "tsclient.h"
+
 #include <regex.h>
 
 /**************** Global variables ****************/
+#ifdef _TD_POWER_
+char      CLIENT_VERSION[] = "Welcome to the PowerDB shell from %s, Client Version:%s\n"
+                             "Copyright (c) 2017 by PowerDB, Inc. All rights reserved.\n\n";
+char      PROMPT_HEADER[] = "power> ";
+
+char      CONTINUE_PROMPT[] = "    -> ";
+int       prompt_size = 7;
+#else
 char      CLIENT_VERSION[] = "Welcome to the TDengine shell from %s, Client Version:%s\n"
                              "Copyright (c) 2017 by TAOS Data, Inc. All rights reserved.\n\n";
 char      PROMPT_HEADER[] = "taos> ";
+
 char      CONTINUE_PROMPT[] = "   -> ";
 int       prompt_size = 6;
+#endif
+
 TAOS_RES *result = NULL;
 SShellHistory   history;
 
 #define DEFAULT_MAX_BINARY_DISPLAY_WIDTH 30
 extern int32_t tsMaxBinaryDisplayWidth;
+extern TAOS *taos_connect_auth(const char *ip, const char *user, const char *auth, const char *db, uint16_t port);
 
 /*
  * FUNCTION: Initialize the shell.
@@ -63,14 +77,15 @@ TAOS *shellInit(SShellArguments *args) {
   }
 
   taos_init();
-  /*
-   * set tsTableMetaKeepTimer = 3000ms
-   * means not save cache in shell
-   */
-  tsTableMetaKeepTimer = 3000;
 
   // Connect to the database.
-  TAOS *con = taos_connect(args->host, args->user, args->password, args->database, args->port);
+  TAOS *con = NULL;
+  if (args->auth == NULL) {
+    con = taos_connect(args->host, args->user, args->password, args->database, args->port);
+  } else {
+    con = taos_connect_auth(args->host, args->user, args->auth, args->database, args->port);
+  }
+
   if (con == NULL) {
     printf("taos connect failed, reason: %s.\n\n", tstrerror(terrno));
     fflush(stdout);
@@ -128,6 +143,9 @@ static int32_t shellRunSingleCommand(TAOS *con, char *command) {
   if (regex_match(command, "^[ \t]*(quit|q|exit)[ \t;]*$", REG_EXTENDED | REG_ICASE)) {
     taos_close(con);
     write_history();
+#ifdef WINDOWS
+    exit(EXIT_SUCCESS);
+#endif
     return -1;
   }
 
@@ -276,9 +294,7 @@ void shellRunCommandOnServer(TAOS *con, char command[]) {
 
   st = taosGetTimestampUs();
 
-  TAOS_RES* pSql = taos_query(con, command);
-  result = pSql;  // set it into the global variable
-
+  TAOS_RES* pSql = taos_query_h(con, command, &result);
   if (taos_errno(pSql)) {
     taos_error(pSql);
     return;
@@ -288,17 +304,16 @@ void shellRunCommandOnServer(TAOS *con, char command[]) {
     fprintf(stdout, "Database changed.\n\n");
     fflush(stdout);
 
-    result = NULL;
+    atomic_store_ptr(&result, 0);
     taos_free_result(pSql);
     return;
   }
 
-  int num_fields = taos_field_count(pSql);
-  if (num_fields != 0) {  // select and show kinds of commands
+  if (!tscIsUpdateQuery(pSql)) {  // select and show kinds of commands
     int error_no = 0;
     int numOfRows = shellDumpResult(pSql, fname, &error_no, printMode);
     if (numOfRows < 0) {
-      result = NULL;
+      atomic_store_ptr(&result, 0);
       taos_free_result(pSql);
       return;
     }
@@ -307,7 +322,7 @@ void shellRunCommandOnServer(TAOS *con, char command[]) {
     if (error_no == 0) {
       printf("Query OK, %d row(s) in set (%.6fs)\n", numOfRows, (et - st) / 1E6);
     } else {
-      printf("Query interrupted (%s), %d row(s) in set (%.6fs)\n", taos_errstr(con), numOfRows, (et - st) / 1E6);
+      printf("Query interrupted (%s), %d row(s) in set (%.6fs)\n", taos_errstr(pSql), numOfRows, (et - st) / 1E6);
     }
   } else {
     int num_rows_affacted = taos_affected_rows(pSql);
@@ -321,7 +336,7 @@ void shellRunCommandOnServer(TAOS *con, char command[]) {
     wordfree(&full_path);
   }
 
-  result = NULL;
+  atomic_store_ptr(&result, 0);
   taos_free_result(pSql);
 }
 
@@ -368,6 +383,18 @@ static char* formatTimestamp(char* buf, int64_t val, int precision) {
     tt = (time_t)(val / 1000);
   }
 
+/* comment out as it make testcases like select_with_tags.sim fail.
+  but in windows, this may cause the call to localtime crash if tt < 0,
+  need to find a better solution.
+  if (tt < 0) {
+    tt = 0;
+  }
+  */
+
+#ifdef WINDOWS
+  if (tt < 0) tt = 0;
+#endif
+
   struct tm* ptm = localtime(&tt);
   size_t pos = strftime(buf, 32, "%Y-%m-%d %H:%M:%S", ptm);
 
@@ -390,16 +417,16 @@ static void dumpFieldToFile(FILE* fp, const char* val, TAOS_FIELD* field, int32_
   char buf[TSDB_MAX_BYTES_PER_ROW];
   switch (field->type) {
     case TSDB_DATA_TYPE_BOOL:
-      fprintf(fp, "%d", ((((int)(*((char *)val))) == 1) ? 1 : 0));
+      fprintf(fp, "%d", ((((int32_t)(*((char *)val))) == 1) ? 1 : 0));
       break;
     case TSDB_DATA_TYPE_TINYINT:
-      fprintf(fp, "%d", (int)(*((char *)val)));
+      fprintf(fp, "%d", *((int8_t *)val));
       break;
     case TSDB_DATA_TYPE_SMALLINT:
-      fprintf(fp, "%d", (int)(*((short *)val)));
+      fprintf(fp, "%d", *((int16_t *)val));
       break;
     case TSDB_DATA_TYPE_INT:
-      fprintf(fp, "%d", *((int *)val));
+      fprintf(fp, "%d", *((int32_t *)val));
       break;
     case TSDB_DATA_TYPE_BIGINT:
       fprintf(fp, "%" PRId64, *((int64_t *)val));
@@ -466,7 +493,7 @@ static int dumpResultToFile(const char* fname, TAOS_RES* tres) {
       if (i > 0) {
         fputc(',', fp);
       }
-      dumpFieldToFile(fp, row[i], fields +i, length[i], precision);
+      dumpFieldToFile(fp, (const char*)row[i], fields +i, length[i], precision);
     }
     fputc('\n', fp);
 
@@ -475,7 +502,6 @@ static int dumpResultToFile(const char* fname, TAOS_RES* tres) {
   } while( row != NULL);
 
   result = NULL;
-  //taos_free_result(tres);
   fclose(fp);
 
   return numOfRows;
@@ -531,16 +557,16 @@ static void printField(const char* val, TAOS_FIELD* field, int width, int32_t le
   char buf[TSDB_MAX_BYTES_PER_ROW];
   switch (field->type) {
     case TSDB_DATA_TYPE_BOOL:
-      printf("%*s", width, ((((int)(*((char *)val))) == 1) ? "true" : "false"));
+      printf("%*s", width, ((((int32_t)(*((char *)val))) == 1) ? "true" : "false"));
       break;
     case TSDB_DATA_TYPE_TINYINT:
-      printf("%*d", width, (int)(*((char *)val)));
+      printf("%*d", width, *((int8_t *)val));
       break;
     case TSDB_DATA_TYPE_SMALLINT:
-      printf("%*d", width, (int)(*((short *)val)));
+      printf("%*d", width, *((int16_t *)val));
       break;
     case TSDB_DATA_TYPE_INT:
-      printf("%*d", width, *((int *)val));
+      printf("%*d", width, *((int32_t *)val));
       break;
     case TSDB_DATA_TYPE_BIGINT:
       printf("%*" PRId64, width, *((int64_t *)val));
@@ -577,7 +603,7 @@ static int verticalPrintResult(TAOS_RES* tres) {
 
   int maxColNameLen = 0;
   for (int col = 0; col < num_fields; col++) {
-    int len = strlen(fields[col].name);
+    int len = (int)strlen(fields[col].name);
     if (len > maxColNameLen) {
       maxColNameLen = len;
     }
@@ -593,7 +619,7 @@ static int verticalPrintResult(TAOS_RES* tres) {
       int padding = (int)(maxColNameLen - strlen(field->name));
       printf("%*.s%s: ", padding, " ", field->name);
 
-      printField(row[i], field, 0, length[i], precision);
+      printField((const char*)row[i], field, 0, length[i], precision);
       putchar('\n');
     }
 
@@ -604,9 +630,8 @@ static int verticalPrintResult(TAOS_RES* tres) {
   return numOfRows;
 }
 
-
 static int calcColWidth(TAOS_FIELD* field, int precision) {
-  int width = strlen(field->name);
+  int width = (int)strlen(field->name);
 
   switch (field->type) {
     case TSDB_DATA_TYPE_BOOL:
@@ -695,7 +720,7 @@ static int horizontalPrintResult(TAOS_RES* tres) {
     int32_t* length = taos_fetch_lengths(tres);
     for (int i = 0; i < num_fields; i++) {
       putchar(' ');
-      printField(row[i], fields + i, width[i], length[i], precision);
+      printField((const char*)row[i], fields + i, width[i], length[i], precision);
       putchar(' ');
       putchar('|');
     }
@@ -737,11 +762,15 @@ void read_history() {
 
   FILE *f = fopen(f_history, "r");
   if (f == NULL) {
-    fprintf(stderr, "Opening file %s\n", f_history);
+#ifndef WINDOWS
+    if (errno != ENOENT) {
+      fprintf(stderr, "Failed to open file %s, reason:%s\n", f_history, strerror(errno));
+    }
+#endif    
     return;
   }
 
-  while ((read_size = getline(&line, &line_size, f)) != -1) {
+  while ((read_size = taosGetline(&line, &line_size, f)) != -1) {
     line[read_size - 1] = '\0';
     history.hist[history.hend] = strdup(line);
 
@@ -757,12 +786,14 @@ void read_history() {
 }
 
 void write_history() {
-  char f_history[128];
+  char f_history[TSDB_FILENAME_LEN];
   get_history_path(f_history);
 
   FILE *f = fopen(f_history, "w");
   if (f == NULL) {
-    fprintf(stderr, "Opening file %s\n", f_history);
+#ifndef WINDOWS    
+    fprintf(stderr, "Failed to open file %s for write, reason:%s\n", f_history, strerror(errno));
+#endif    
     return;
   }
 
@@ -777,8 +808,8 @@ void write_history() {
 }
 
 void taos_error(TAOS_RES *tres) {
+  atomic_store_ptr(&result, 0);
   fprintf(stderr, "\nDB error: %s\n", taos_errstr(tres));
-  result = NULL;
   taos_free_result(tres);
 }
 
@@ -822,7 +853,7 @@ void source_file(TAOS *con, char *fptr) {
     return;
   }
 
-  while ((read_len = getline(&line, &line_len, f)) != -1) {
+  while ((read_len = taosGetline(&line, &line_len, f)) != -1) {
     if (read_len >= tsMaxSQLStringLen) continue;
     line[--read_len] = '\0';
 

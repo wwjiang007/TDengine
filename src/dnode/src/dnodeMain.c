@@ -24,6 +24,7 @@
 #include "dnodeMgmt.h"
 #include "dnodePeer.h"
 #include "dnodeModule.h"
+#include "dnodeCheck.h"
 #include "dnodeVRead.h"
 #include "dnodeVWrite.h"
 #include "dnodeMRead.h"
@@ -49,6 +50,7 @@ typedef struct {
 
 static const SDnodeComponent tsDnodeComponents[] = {
   {"storage",   dnodeInitStorage,    dnodeCleanupStorage},
+  {"check",     dnodeInitCheck,      dnodeCleanupCheck},     // NOTES: dnodeInitCheck must be behind the dnodeinitStorage component !!!
   {"vread",     dnodeInitVnodeRead,  dnodeCleanupVnodeRead},
   {"vwrite",    dnodeInitVnodeWrite, dnodeCleanupVnodeWrite},
   {"mread",     dnodeInitMnodeRead,  dnodeCleanupMnodeRead},
@@ -159,7 +161,7 @@ static void dnodeCheckDataDirOpenned(char *dir) {
   }
   int32_t ret = flock(fd, LOCK_EX | LOCK_NB);
   if (ret != 0) {
-    dError("failed to lock file:%s ret:%d, database may be running, quit", filepath, ret);
+    dError("failed to lock file:%s ret:%d[%s], database may be running, quit", filepath, ret, strerror(errno));
     close(fd);
     exit(0);
   }

@@ -23,7 +23,7 @@ extern "C" {
 #ifndef TAOS_OS_FUNC_SEMPHONE
   #define tsem_t sem_t
   #define tsem_init sem_init
-  #define tsem_wait sem_wait
+  int tsem_wait(tsem_t* sem);
   #define tsem_post sem_post
   #define tsem_destroy sem_destroy
 #endif
@@ -31,6 +31,10 @@ extern "C" {
 // TAOS_OS_FUNC_SEMPHONE_PTHREAD
 bool taosCheckPthreadValid(pthread_t thread);
 int64_t taosGetPthreadId();
+void taosResetPthread(pthread_t *thread);
+bool taosComparePthread(pthread_t first, pthread_t second);
+int32_t taosGetPId();
+int32_t taosGetCurrentAPPName(char *name, int32_t* len);
 
 #ifdef __cplusplus
 }

@@ -32,16 +32,16 @@ void insertChar(Command *cmd, char *c, int size);
 
 void printHelp() {
   char indent[10] = "        ";
-  printf("taos shell is used to test the TDEngine database\n");
+  printf("taos shell is used to test the TDengine database\n");
 
   printf("%s%s\n", indent, "-h");
-  printf("%s%s%s\n", indent, indent, "TDEngine server IP address to connect. The default host is localhost.");
+  printf("%s%s%s\n", indent, indent, "TDengine server IP address to connect. The default host is localhost.");
   printf("%s%s\n", indent, "-p");
   printf("%s%s%s\n", indent, indent, "The password to use when connecting to the server.");
   printf("%s%s\n", indent, "-P");
   printf("%s%s%s\n", indent, indent, "The TCP/IP port number to use for the connection");
   printf("%s%s\n", indent, "-u");
-  printf("%s%s%s\n", indent, indent, "The TDEngine user name to use when connecting to the server.");
+  printf("%s%s%s\n", indent, indent, "The user name to use when connecting to the server.");
   printf("%s%s\n", indent, "-c");
   printf("%s%s%s\n", indent, indent, "Configuration directory.");
   printf("%s%s\n", indent, "-s");
@@ -62,7 +62,7 @@ void printHelp() {
   exit(EXIT_SUCCESS);
 }
 
-void shellParseArgument(int argc, char *argv[], struct arguments *arguments) {
+void shellParseArgument(int argc, char *argv[], SShellArguments *arguments) {
   wordexp_t full_path;
   for (int i = 1; i < argc; i++) {
     // for host

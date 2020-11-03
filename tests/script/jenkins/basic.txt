@@ -77,6 +77,9 @@ cd ../../../debug; make
 ./test.sh -f general/field/smallint.sim
 ./test.sh -f general/field/tinyint.sim
 
+./test.sh -f general/http/autocreate.sim
+./test.sh -f general/http/chunked.sim
+./test.sh -f general/http/gzip.sim
 ./test.sh -f general/http/restful.sim
 ./test.sh -f general/http/restful_insert.sim
 ./test.sh -f general/http/restful_limit.sim
@@ -135,7 +138,6 @@ cd ../../../debug; make
 ./test.sh -f general/parser/limit2.sim
 ./test.sh -f general/parser/fill.sim
 ./test.sh -f general/parser/fill_stb.sim
-#./test.sh -f general/parser/fill_us.sim
 ./test.sh -f general/parser/where.sim
 ./test.sh -f general/parser/slimit.sim
 ./test.sh -f general/parser/select_with_tags.sim
@@ -143,14 +145,14 @@ cd ../../../debug; make
 ./test.sh -f general/parser/tags_dynamically_specifiy.sim
 ./test.sh -f general/parser/groupby.sim
 ./test.sh -f general/parser/set_tag_vals.sim
-#./test.sh -f general/parser/sliding.sim
 ./test.sh -f general/parser/tags_filter.sim
 ./test.sh -f general/parser/slimit_alter_tags.sim
 ./test.sh -f general/parser/join.sim
 ./test.sh -f general/parser/join_multivnode.sim
 ./test.sh -f general/parser/binary_escapeCharacter.sim
-./test.sh -f general/parser/bug.sim
 ./test.sh -f general/parser/repeatAlter.sim
+./test.sh -f general/parser/union.sim
+./test.sh -f general/parser/topbot.sim
 
 ./test.sh -f general/stable/disk.sim
 ./test.sh -f general/stable/dnode3.sim
@@ -254,6 +256,7 @@ cd ../../../debug; make
 ./test.sh -f unique/cluster/balance2.sim
 ./test.sh -f unique/cluster/balance3.sim
 ./test.sh -f unique/cluster/cache.sim
+./test.sh -f unique/cluster/vgroup100.sim
 
 ./test.sh -f unique/column/replica3.sim
 
@@ -269,12 +272,14 @@ cd ../../../debug; make
 ./test.sh -f unique/db/replica_part.sim
 
 ./test.sh -f unique/dnode/alternativeRole.sim
+./test.sh -f unique/dnode/simple.sim
 ./test.sh -f unique/dnode/balance1.sim
 ./test.sh -f unique/dnode/balance2.sim
 ./test.sh -f unique/dnode/balance3.sim
 ./test.sh -f unique/dnode/balancex.sim
 ./test.sh -f unique/dnode/offline1.sim
 ./test.sh -f unique/dnode/offline2.sim
+./test.sh -f unique/dnode/reason.sim
 ./test.sh -f unique/dnode/remove1.sim
 ./test.sh -f unique/dnode/remove2.sim
 ./test.sh -f unique/dnode/vnode_clean.sim
@@ -294,6 +299,8 @@ cd ../../../debug; make
 ./test.sh -f unique/stable/replica3_dnode6.sim
 ./test.sh -f unique/stable/replica3_vnode3.sim
 
+./test.sh -f unique/mnode/mgmt20.sim
+./test.sh -f unique/mnode/mgmt21.sim
 ./test.sh -f unique/mnode/mgmt22.sim
 ./test.sh -f unique/mnode/mgmt23.sim
 ./test.sh -f unique/mnode/mgmt24.sim

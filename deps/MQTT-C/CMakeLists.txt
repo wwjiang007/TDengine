@@ -1,5 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
-project(MQTT-C VERSION 1.1.2 LANGUAGES C)
+CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 
 # MQTT-C build options
 option(MQTT_C_OpenSSL_SUPPORT "Build MQTT-C with OpenSSL support?" OFF)
@@ -10,11 +9,11 @@ option(MQTT_C_TESTS "Build MQTT-C tests?" OFF)
 list (APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 # MQTT-C library
-add_library(mqttc STATIC 
+ADD_LIBRARY(mqttc STATIC 
     src/mqtt_pal.c
     src/mqtt.c
 )
-target_include_directories(mqttc PUBLIC include)
+TARGET_INCLUDE_DIRECTORIES(mqttc PUBLIC include)
 target_link_libraries(mqttc PUBLIC 
     $<$<C_COMPILER_ID:MSVS>:ws2_32>
 )
@@ -30,7 +29,7 @@ endif()
 # Configure with mbed TLS support
 if(MQTT_C_MbedTLS_SUPPORT)
     find_package(MbedTLS REQUIRED)
-    target_include_directories(mqttc PUBLIC ${MBEDTLS_INCLUDE_DIRS})
+    TARGET_INCLUDE_DIRECTORIES(mqttc PUBLIC ${MBEDTLS_INCLUDE_DIRS})
     target_link_libraries(mqttc INTERFACE ${MBEDTLS_LIBRARY})
     target_compile_definitions(mqttc PUBLIC MQTT_USE_MBEDTLS)
 endif()
@@ -70,7 +69,7 @@ if(MQTT_C_TESTS)
 
     add_executable(tests tests.c)
     target_link_libraries(tests ${CMOCKA_LIBRARY} mqttc)
-    target_include_directories(tests PRIVATE ${CMOCKA_INCLUDE_DIR})
+    TARGET_INCLUDE_DIRECTORIES(tests PRIVATE ${CMOCKA_INCLUDE_DIR})
 endif()
 
 # Install includes and library
