@@ -4,7 +4,7 @@
 #include <iostream>
 
 #include "taos.h"
-#include "tstoken.h"
+#include "ttoken.h"
 #include "tutil.h"
 
 int main(int argc, char** argv) {
@@ -162,6 +162,10 @@ TEST(testCase, parse_time) {
   
   taosParseTime(t13, &time, strlen(t13), TSDB_TIME_PRECISION_MILLI, 0);
   EXPECT_EQ(time, -28800 * MILLISECOND_PER_SECOND);
+
+  char* t = "2021-01-08T02:11:40.000+00:00";
+  taosParseTime(t, &time, strlen(t), TSDB_TIME_PRECISION_MILLI, 0);
+  printf("%ld\n", time);
 }
 
 

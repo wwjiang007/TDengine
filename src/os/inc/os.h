@@ -32,6 +32,10 @@ extern "C" {
 #include "osArm32.h"
 #endif
 
+#ifdef _TD_MIPS_64
+#include "osMips64.h"
+#endif
+
 #ifdef _TD_LINUX_64
 #include "osLinux64.h"
 #endif
@@ -62,6 +66,7 @@ extern "C" {
 #include "osMemory.h"
 #include "osRand.h"
 #include "osSemphone.h"
+#include "osSignal.h"
 #include "osSocket.h"
 #include "osString.h"
 #include "osSysinfo.h"

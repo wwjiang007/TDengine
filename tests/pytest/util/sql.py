@@ -16,7 +16,10 @@ import os
 import time
 import datetime
 import inspect
+import psutil
+import shutil
 from util.log import *
+
 
 
 class TDSql:
@@ -84,6 +87,7 @@ class TDSql:
                 self.queryResult = self.cursor.fetchall()
                 self.queryRows = len(self.queryResult)
                 self.queryCols = len(self.cursor.description)
+                tdLog.info("sql: %s, try to retrieve %d rows,get %d rows" % (sql, expectRows, self.queryRows))
                 if self.queryRows >= expectRows:
                     return (self.queryRows, i)
                 time.sleep(1)
@@ -101,6 +105,14 @@ class TDSql:
             caller = inspect.getframeinfo(inspect.stack()[1][0])
             args = (caller.filename, caller.lineno, self.sql, self.queryRows, expectRows)
             tdLog.exit("%s(%d) failed: sql:%s, queryRows:%d != expect:%d" % args)
+
+    def checkCols(self, expectCols):
+        if self.queryCols == expectCols:
+            tdLog.info("sql:%s, queryCols:%d == expect:%d" % (self.sql, self.queryCols, expectCols))
+        else:
+            caller = inspect.getframeinfo(inspect.stack()[1][0])
+            args = (caller.filename, caller.lineno, self.sql, self.queryCols, expectCols)
+            tdLog.exit("%s(%d) failed: sql:%s, queryCols:%d != expect:%d" % args)
 
     def checkRowCol(self, row, col):
         caller = inspect.getframeinfo(inspect.stack()[2][0])
@@ -124,6 +136,11 @@ class TDSql:
     def checkData(self, row, col, data):
         self.checkRowCol(row, col) 
         if self.queryResult[row][col] != data:            
+            if self.cursor.istype(col, "TIMESTAMP") and self.queryResult[row][col] == datetime.datetime.fromisoformat(data):
+                tdLog.info("sql:%s, row:%d col:%d data:%s == expect:%s" %
+                            (self.sql, row, col, self.queryResult[row][col], data))
+                return
+
             if str(self.queryResult[row][col]) == str(data):
                 tdLog.info("sql:%s, row:%d col:%d data:%s == expect:%s" %
                             (self.sql, row, col, self.queryResult[row][col], data)) 
@@ -183,6 +200,55 @@ class TDSql:
             tdLog.exit("%s(%d) failed: sql:%s, affectedRows:%d != expect:%d" % args)
 
         tdLog.info("sql:%s, affectedRows:%d == expect:%d" % (self.sql, self.affectedRows, expectAffectedRows))
+    
+    def taosdStatus(self, state):
+        tdLog.sleep(5)
+        pstate = 0
+        for i in range(30):
+            pstate = 0
+            pl = psutil.pids()
+            for pid in pl:
+                try:
+                    if psutil.Process(pid).name() == 'taosd':
+                        print('have already started')
+                        pstate = 1
+                        break
+                except psutil.NoSuchProcess:
+                    pass
+            if pstate == state :break
+            if state or pstate:
+                tdLog.sleep(1)
+                continue
+            pstate = 0
+            break
+            
+        args=(pstate,state)
+        if pstate == state:
+            tdLog.info("taosd state is %d == expect:%d" %args)
+        else:
+            tdLog.exit("taosd state is %d != expect:%d" %args)
+        pass
 
-
+    def haveFile(self, dir, state):
+        if os.path.exists(dir) and os.path.isdir(dir):
+            if not os.listdir(dir):
+                if state :
+                    tdLog.exit("dir: %s is empty, expect: not empty" %dir)
+                else:
+                    tdLog.info("dir: %s is empty, expect: empty" %dir)
+            else:  
+                if state :
+                    tdLog.info("dir: %s is not empty, expect: not empty" %dir)
+                else:
+                    tdLog.exit("dir: %s is not empty, expect: empty" %dir)  
+        else:
+            tdLog.exit("dir: %s doesn't exist" %dir)
+    def createDir(self, dir):
+        if os.path.exists(dir):
+            shutil.rmtree(dir)
+            tdLog.info("dir: %s is removed" %dir)
+        os.makedirs( dir, 755 )
+        tdLog.info("dir: %s is created" %dir)
+        pass
+        
 tdSql = TDSql()

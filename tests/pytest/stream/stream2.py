@@ -87,6 +87,12 @@ class TDTestCase:
             tdSql.checkData(0, 3, rowNum)
         except Exception as e:
             tdLog.info(repr(e))
+        
+        
+        time.sleep(5)
+        tdSql.query("show streams")
+        tdSql.checkRows(1)
+        tdSql.checkData(0, 2, 's0')
 
         tdLog.info("===== step8 =====")
         tdSql.query(
@@ -141,6 +147,13 @@ class TDTestCase:
             #tdSql.checkData(0, 3, None)
         except Exception as e:
             tdLog.info(repr(e))
+
+        time.sleep(5)
+        tdSql.query("show streams")
+        tdSql.checkRows(2)
+        tdSql.checkData(0, 2, 's1')
+        tdSql.checkData(1, 2, 's0')
+        
 
     def stop(self):
         tdSql.close()

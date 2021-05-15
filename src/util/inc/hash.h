@@ -31,15 +31,18 @@ extern "C" {
 typedef void (*_hash_free_fn_t)(void *param);
 
 typedef struct SHashNode {
-//  char             *key;
   struct SHashNode *next;
-  uint32_t          hashVal;  // the hash value of key
-  uint32_t          keyLen;   // length of the key
-//  char             *data;
+  uint32_t          hashVal;     // the hash value of key
+  uint32_t          dataLen;     // length of data
+  uint32_t          keyLen;      // length of the key
+  int8_t            removed;     // flag to indicate removed
+  int8_t            count;       // reference count
+  char              data[];
 } SHashNode;
 
-#define GET_HASH_NODE_KEY(_n)  ((char*)(_n) + sizeof(SHashNode))
-#define GET_HASH_NODE_DATA(_n) ((char*)(_n) + sizeof(SHashNode) + (_n)->keyLen)
+#define GET_HASH_NODE_KEY(_n)  ((char*)(_n) + sizeof(SHashNode) + (_n)->dataLen)
+#define GET_HASH_NODE_DATA(_n) ((char*)(_n) + sizeof(SHashNode))
+#define GET_HASH_PNODE(_n) ((char*)(_n) - sizeof(SHashNode));
 
 typedef enum SHashLockTypeE {
   HASH_NO_LOCK     = 0,
@@ -65,15 +68,6 @@ typedef struct SHashObj {
   SArray         *pMemBlock;    // memory block allocated for SHashEntry
 } SHashObj;
 
-typedef struct SHashMutableIterator {
-  SHashObj  *pHashObj;
-  int32_t    entryIndex;
-  SHashNode *pCur;
-  SHashNode *pNext;           // current node can be deleted for mutable iterator, so keep the next one before return current
-  size_t     numOfChecked;    // already check number of elements in hash table
-  size_t     numOfEntries;    // number of entries while the iterator is created
-} SHashMutableIterator;
-
 /**
  * init the hash table
  *
@@ -89,7 +83,7 @@ SHashObj *taosHashInit(size_t capacity, _hash_fn_t fn, bool update, SHashLockTyp
  * @param pHashObj
  * @return
  */
-size_t taosHashGetSize(const SHashObj *pHashObj);
+int32_t taosHashGetSize(const SHashObj *pHashObj);
 
 /**
  * put element into hash table, if the element with the same key exists, update it
@@ -122,7 +116,7 @@ void *taosHashGet(SHashObj *pHashObj, const void *key, size_t keyLen);
  * @param dsize
  * @return
  */
-void* taosHashGetCB(SHashObj *pHashObj, const void *key, size_t keyLen, void (*fp)(void *), void* d, size_t dsize);
+void* taosHashGetClone(SHashObj *pHashObj, const void *key, size_t keyLen, void (*fp)(void *), void* d, size_t dsize);
 
 /**
  * remove item with the specified key
@@ -136,6 +130,8 @@ int32_t taosHashRemoveWithData(SHashObj *pHashObj, const void *key, size_t keyLe
 
 int32_t taosHashCondTraverse(SHashObj *pHashObj, bool (*fp)(void *, void *), void *param);
 
+void taosHashEmpty(SHashObj *pHashObj);
+
 /**
  * clean up hash table
  * @param handle
@@ -147,37 +143,12 @@ void taosHashCleanup(SHashObj *pHashObj);
  * @param pHashObj
  * @return
  */
-SHashMutableIterator* taosHashCreateIter(SHashObj *pHashObj);
-
-/**
- *
- * @param iter
- * @return
- */
-bool taosHashIterNext(SHashMutableIterator *iter);
-
-/**
- *
- * @param iter
- * @return
- */
-void *taosHashIterGet(SHashMutableIterator *iter);
-
-/**
- *
- * @param iter
- * @return
- */
-void* taosHashDestroyIter(SHashMutableIterator* iter);
-
-/**
- *
- * @param pHashObj
- * @return
- */
 int32_t taosHashGetMaxOverflowLinkLength(const SHashObj *pHashObj);
 
 size_t taosHashGetMemSize(const SHashObj *pHashObj);
+
+void *taosHashIterate(SHashObj *pHashObj, void *p);
+void  taosHashCancelIterate(SHashObj *pHashObj, void *p);
 
 #ifdef __cplusplus
 }

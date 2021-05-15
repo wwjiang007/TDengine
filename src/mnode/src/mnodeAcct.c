@@ -26,6 +26,7 @@
 #include "mnodeUser.h"
 #include "mnodeVgroup.h"
 
+int64_t tsAcctRid = -1;
 void *  tsAcctSdb = NULL;
 static int32_t tsAcctUpdateSize;
 static int32_t mnodeCreateRootAcct();
@@ -80,7 +81,7 @@ static int32_t mnodeAcctActionDecode(SSdbRow *pRow) {
 }
 
 static int32_t mnodeAcctActionRestored() {
-  int32_t numOfRows = sdbGetNumOfRows(tsAcctSdb);
+  int64_t numOfRows = sdbGetNumOfRows(tsAcctSdb);
   if (numOfRows <= 0 && dnodeIsFirstDeploy()) {
     mInfo("dnode first deploy, create root acct");
     int32_t code = mnodeCreateRootAcct();
@@ -96,14 +97,14 @@ static int32_t mnodeAcctActionRestored() {
 
 int32_t mnodeInitAccts() {
   SAcctObj tObj;
-  tsAcctUpdateSize = (int8_t *)tObj.updateEnd - (int8_t *)&tObj;
+  tsAcctUpdateSize = (int32_t)((int8_t *)tObj.updateEnd - (int8_t *)&tObj);
 
   SSdbTableDesc desc = {
     .id           = SDB_TABLE_ACCOUNT,
     .name         = "accounts",
     .hashSessions = TSDB_DEFAULT_ACCOUNTS_HASH_SIZE,
     .maxRowSize   = tsAcctUpdateSize,
-    .refCountPos  = (int8_t *)(&tObj.refCount) - (int8_t *)&tObj,
+    .refCountPos  = (int32_t)((int8_t *)(&tObj.refCount) - (int8_t *)&tObj),
     .keyType      = SDB_KEY_STRING,
     .fpInsert     = mnodeAcctActionInsert,
     .fpDelete     = mnodeAcctActionDelete,
@@ -114,7 +115,8 @@ int32_t mnodeInitAccts() {
     .fpRestored   = mnodeAcctActionRestored
   };
 
-  tsAcctSdb = sdbOpenTable(&desc);
+  tsAcctRid = sdbOpenTable(&desc);
+  tsAcctSdb = sdbGetTableByRid(tsAcctRid);
   if (tsAcctSdb == NULL) {
     mError("table:%s, failed to create hash", desc.name);
     return -1;
@@ -126,7 +128,7 @@ int32_t mnodeInitAccts() {
 
 void mnodeCleanupAccts() {
   acctCleanUp();
-  sdbCloseTable(tsAcctSdb);
+  sdbCloseTable(tsAcctRid);
   tsAcctSdb = NULL;
 }
 
@@ -144,7 +146,6 @@ void mnodeGetStatOfAllAcct(SAcctInfo* pAcctInfo) {
     pAcctInfo->numOfTimeSeries += pAcct->acctInfo.numOfTimeSeries;
     mnodeDecAcctRef(pAcct);
   }
-  sdbFreeIter(pIter);
 
   SVgObj *pVgroup = NULL;
   pIter = NULL;
@@ -158,7 +159,6 @@ void mnodeGetStatOfAllAcct(SAcctInfo* pAcctInfo) {
     pAcctInfo->totalPoints += pVgroup->pointsWritten;
     mnodeDecVgroupRef(pVgroup);
   }
-  sdbFreeIter(pIter);
 }
 
 void *mnodeGetAcct(char *name) {
@@ -167,6 +167,10 @@ void *mnodeGetAcct(char *name) {
 
 void *mnodeGetNextAcct(void *pIter, SAcctObj **pAcct) {
   return sdbFetchRow(tsAcctSdb, pIter, (void **)pAcct); 
+}
+
+void mnodeCancelGetNextAcct(void *pIter) {
+  sdbFreeIter(tsAcctSdb, pIter);
 }
 
 void mnodeIncAcctRef(SAcctObj *pAcct) {
@@ -202,7 +206,7 @@ void mnodeDropUserFromAcct(SAcctObj *pAcct, SUserObj *pUser) {
 }
 
 static int32_t mnodeCreateRootAcct() {
-  int32_t numOfAccts = sdbGetNumOfRows(tsAcctSdb);
+  int64_t numOfAccts = sdbGetNumOfRows(tsAcctSdb);
   if (numOfAccts != 0) return TSDB_CODE_SUCCESS;
 
   SAcctObj *pAcct = malloc(sizeof(SAcctObj));

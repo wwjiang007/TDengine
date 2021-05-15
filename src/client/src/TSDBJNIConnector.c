@@ -481,15 +481,19 @@ JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_fetchRowImp(JNIEn
       case TSDB_DATA_TYPE_BOOL:
         (*env)->CallVoidMethod(env, rowobj, g_rowdataSetBooleanFp, i, (jboolean)(*((char *)row[i]) == 1));
         break;
+      case TSDB_DATA_TYPE_UTINYINT:
       case TSDB_DATA_TYPE_TINYINT:
         (*env)->CallVoidMethod(env, rowobj, g_rowdataSetByteFp, i, (jbyte) * ((int8_t *)row[i]));
         break;
+      case TSDB_DATA_TYPE_USMALLINT:
       case TSDB_DATA_TYPE_SMALLINT:
         (*env)->CallVoidMethod(env, rowobj, g_rowdataSetShortFp, i, (jshort) * ((int16_t *)row[i]));
         break;
+      case TSDB_DATA_TYPE_UINT:
       case TSDB_DATA_TYPE_INT:
         (*env)->CallVoidMethod(env, rowobj, g_rowdataSetIntFp, i, (jint) * (int32_t *)row[i]);
         break;
+      case TSDB_DATA_TYPE_UBIGINT:
       case TSDB_DATA_TYPE_BIGINT:
         (*env)->CallVoidMethod(env, rowobj, g_rowdataSetLongFp, i, (jlong) * ((int64_t *)row[i]));
         break;
@@ -666,4 +670,21 @@ JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_validateCreateTab
 
 JNIEXPORT jstring JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_getTsCharset(JNIEnv *env, jobject jobj) {
   return (*env)->NewStringUTF(env, (const char *)tsCharset);
+}
+
+JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TDDBJNIConnector_getResultTimePrecision(JNIEnv *env, jobject jobj, jlong con,
+                                                                                      jlong res) {
+  TAOS *tscon = (TAOS *)con;
+  if (tscon == NULL) {
+    jniError("jobj:%p, connection is closed", jobj);
+    return JNI_CONNECTION_NULL;
+  }
+
+  TAOS_RES *result = (TAOS_RES *)res;
+  if (result == NULL) {
+    jniError("jobj:%p, conn:%p, resultset is null", jobj, tscon);
+    return JNI_RESULT_SET_NULL;
+  }
+
+  return taos_result_precision(result);
 }

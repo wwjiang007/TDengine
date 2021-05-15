@@ -17,6 +17,7 @@
 #include "os.h"
 #include "taoserror.h"
 #include "tref.h"
+#include "tfile.h"
 #include "twal.h"
 #include "walInt.h"
 
@@ -43,7 +44,7 @@ int32_t walInit() {
     return code;
   }
 
-  wInfo("wal module is initialized, refId:%d", tsWal.refId);
+  wInfo("wal module is initialized, rsetId:%d", tsWal.refId);
   return code;
 }
 
@@ -61,7 +62,7 @@ void *walOpen(char *path, SWalCfg *pCfg) {
   }
 
   pWal->vgId = pCfg->vgId;
-  pWal->fd = -1;
+  pWal->tfd = -1;
   pWal->fileId = -1;
   pWal->level = pCfg->walLevel;
   pWal->keep = pCfg->keep;
@@ -103,7 +104,7 @@ int32_t walAlter(void *handle, SWalCfg *pCfg) {
 
   pWal->level = pCfg->walLevel;
   pWal->fsyncPeriod = pCfg->fsyncPeriod;
-  pWal->fsyncSeq = pCfg->fsyncPeriod % 1000;
+  pWal->fsyncSeq = pCfg->fsyncPeriod / 1000;
   if (pWal->fsyncSeq <= 0) pWal->fsyncSeq = 1;
 
   return TSDB_CODE_SUCCESS;
@@ -124,7 +125,7 @@ void walClose(void *handle) {
 
   SWal *pWal = handle;
   pthread_mutex_lock(&pWal->mutex);
-  taosClose(pWal->fd);
+  tfClose(pWal->tfd);
   pthread_mutex_unlock(&pWal->mutex);
   taosRemoveRef(tsWal.refId, pWal->rid);
 }
@@ -143,7 +144,7 @@ static void walFreeObj(void *wal) {
   SWal *pWal = wal;
   wDebug("vgId:%d, wal:%p is freed", pWal->vgId, pWal);
 
-  taosClose(pWal->fd);
+  tfClose(pWal->tfd);
   pthread_mutex_destroy(&pWal->mutex);
   tfree(pWal);
 }
@@ -172,7 +173,7 @@ static void walFsyncAll() {
   while (pWal) {
     if (walNeedFsync(pWal)) {
       wTrace("vgId:%d, do fsync, level:%d seq:%d rseq:%d", pWal->vgId, pWal->level, pWal->fsyncSeq, tsWal.seq);
-      int32_t code = fsync(pWal->fd);
+      int32_t code = tfFsync(pWal->tfd);
       if (code != 0) {
         wError("vgId:%d, file:%s, failed to fsync since %s", pWal->vgId, pWal->name, strerror(code));
       }
@@ -202,14 +203,14 @@ static int32_t walCreateThread() {
   }
 
   pthread_attr_destroy(&thAttr);
-  wDebug("wal thread is launched");
+  wDebug("wal thread is launched, thread:0x%08" PRIx64, taosGetPthreadId(tsWal.thread));
 
   return TSDB_CODE_SUCCESS;
 }
 
 static void walStopThread() {
   tsWal.stop = 1;
-  if (tsWal.thread) {
+  if (taosCheckPthreadValid(tsWal.thread)) {
     pthread_join(tsWal.thread, NULL);
   }
 

@@ -21,6 +21,8 @@
 #include "shellCommand.h"
 #include "tkey.h"
 
+#include "tscLog.h"
+
 #define OPT_ABORT 1 /* �Cabort */
 
 int indicator = 1;
@@ -178,7 +180,7 @@ void shellParseArgument(int argc, char *argv[], SShellArguments *arguments) {
   }
 }
 
-void shellReadCommand(TAOS *con, char *command) {
+int32_t shellReadCommand(TAOS *con, char *command) {
   unsigned hist_counter = history.hend;
   char utf8_array[10] = "\0";
   Command cmd;
@@ -231,7 +233,7 @@ void shellReadCommand(TAOS *con, char *command) {
             sprintf(command, "%s%s", cmd.buffer, cmd.command);
             tfree(cmd.buffer);
             tfree(cmd.command);
-            return;
+            return 0;
           } else {
             updateBuffer(&cmd);
           }
@@ -322,6 +324,8 @@ void shellReadCommand(TAOS *con, char *command) {
       insertChar(&cmd, &c, 1);
     }
   }
+
+  return 0;
 }
 
 void *shellLoopQuery(void *arg) {
@@ -340,13 +344,21 @@ void *shellLoopQuery(void *arg) {
       return NULL;
     }
 
+    int32_t err = 0;
+
     do {
       // Read command from shell.
       memset(command, 0, MAX_COMMAND_SIZE);
       set_terminal_mode();
-      shellReadCommand(con, command);
+      err = shellReadCommand(con, command);
+      if (err) {
+        break;
+      }
       reset_terminal_mode();
     } while (shellRunCommand(con, command) == 0);
+
+  tfree(command);
+  exitShell();
 
   pthread_cleanup_pop(1);
 
@@ -407,7 +419,11 @@ void get_history_path(char *history) { sprintf(history, "%s/%s", getpwuid(getuid
 
 void clearScreen(int ecmd_pos, int cursor_pos) {
   struct winsize w;
-  ioctl(0, TIOCGWINSZ, &w);
+  if (ioctl(0, TIOCGWINSZ, &w) < 0 || w.ws_col == 0 || w.ws_row == 0) {
+    //fprintf(stderr, "No stream device, and use default value(col 120, row 30)\n");
+    w.ws_col = 120;
+    w.ws_row = 30;
+  }
 
   int cursor_x = cursor_pos / w.ws_col;
   int cursor_y = cursor_pos % w.ws_col;
@@ -425,8 +441,9 @@ void clearScreen(int ecmd_pos, int cursor_pos) {
 void showOnScreen(Command *cmd) {
   struct winsize w;
   if (ioctl(0, TIOCGWINSZ, &w) < 0 || w.ws_col == 0 || w.ws_row == 0) {
-    fprintf(stderr, "No stream device\n");
-    exit(EXIT_FAILURE);
+    //fprintf(stderr, "No stream device\n");
+    w.ws_col = 120;
+    w.ws_row = 30;
   }
 
   wchar_t wc;

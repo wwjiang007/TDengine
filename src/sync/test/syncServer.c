@@ -70,7 +70,7 @@ int writeIntoWal(SWalHead *pHead) {
   return 0;
 }
 
-void confirmForward(void *ahandle, void *mhandle, int32_t code) {
+void confirmForward(int32_t vgId, void *mhandle, int32_t code) {
   SRpcMsg * pMsg = (SRpcMsg *)mhandle;
   SWalHead *pHead = (SWalHead *)(((char *)pMsg->pCont) - sizeof(SWalHead));
 
@@ -100,7 +100,7 @@ int processRpcMsg(void *item) {
     pHead->msgType = pMsg->msgType;
     pHead->len = pMsg->contLen;
 
-    uDebug("ver:%" PRIu64 ", pkt from client processed", pHead->version);
+    uDebug("ver:%" PRIu64 ", rsp from client processed", pHead->version);
     writeIntoWal(pHead);
     syncForwardToPeer(syncHandle, pHead, item, TAOS_QTYPE_RPC);
 
@@ -227,7 +227,7 @@ void processRequestMsg(SRpcMsg *pMsg, SRpcEpSet *pEpSet) {
   taosWriteQitem(qhandle, TAOS_QTYPE_RPC, pTemp);
 }
 
-uint32_t getFileInfo(void *ahandle, char *name, uint32_t *index, uint32_t eindex, int64_t *size, uint64_t *fversion) {
+uint32_t getFileInfo(int32_t vgId, char *name, uint32_t *index, uint32_t eindex, int64_t *size, uint64_t *fversion) {
   uint32_t    magic;
   struct stat fstat;
   char        aname[280];
@@ -254,7 +254,7 @@ uint32_t getFileInfo(void *ahandle, char *name, uint32_t *index, uint32_t eindex
   return magic;
 }
 
-int getWalInfo(void *ahandle, char *name, int64_t *index) {
+int getWalInfo(int32_t vgId, char *name, int64_t *index) {
   struct stat fstat;
   char        aname[280];
 
@@ -272,10 +272,10 @@ int getWalInfo(void *ahandle, char *name, int64_t *index) {
   return 1;
 }
 
-int writeToCache(void *ahandle, void *data, int type) {
+int writeToCache(int32_t vgId, void *data, int type) {
   SWalHead *pHead = data;
 
-  uDebug("pkt from peer is received, ver:%" PRIu64 " len:%d type:%d", pHead->version, pHead->len, type);
+  uDebug("rsp from peer is received, ver:%" PRIu64 " len:%d type:%d", pHead->version, pHead->len, type);
 
   int   msgSize = pHead->len + sizeof(SWalHead);
   void *pMsg = taosAllocateQitem(msgSize);
@@ -285,9 +285,9 @@ int writeToCache(void *ahandle, void *data, int type) {
   return 0;
 }
 
-void confirmFwd(void *ahandle, int64_t version) { return; }
+void confirmFwd(int32_t vgId, int64_t version) { return; }
 
-void notifyRole(void *ahandle, int8_t r) {
+void notifyRole(int32_t vgId, int8_t r) {
   role = r;
   printf("current role:%s\n", syncRole[role]);
 }
@@ -296,12 +296,10 @@ void initSync() {
   pCfg->replica = 1;
   pCfg->quorum = 1;
   syncInfo.vgId = 1;
-  syncInfo.ahandle = &syncInfo;
-  syncInfo.getFileInfo = getFileInfo;
-  syncInfo.getWalInfo = getWalInfo;
-  syncInfo.writeToCache = writeToCache;
+  syncInfo.getWalInfoFp = getWalInfo;
+  syncInfo.writeToCacheFp = writeToCache;
   syncInfo.confirmForward = confirmForward;
-  syncInfo.notifyRole = notifyRole;
+  syncInfo.notifyRoleFp = notifyRole;
 
   pCfg->nodeInfo[0].nodeId = 1;
   pCfg->nodeInfo[0].nodePort = 7010;

@@ -11,15 +11,9 @@
 
 # -*- coding: utf-8 -*-
 
-import os
-import sys
-sys.path.insert(0, os.getcwd())
 from fabric import Connection
-from util.sql import *
-from util.log import *
-import taos
 import random
-import threading
+import time
 import logging
 
 class Node:
@@ -31,6 +25,23 @@ class Node:
         self.homeDir = homeDir
         self.conn = Connection("{}@{}".format(username, hostName), connect_kwargs={"password": "{}".format(password)}) 
     
+    def buildTaosd(self):
+        try:
+            self.conn.cd("/root/TDinternal/community")
+            self.conn.run("git checkout develop")
+            self.conn.run("git pull")
+            self.conn.cd("/root/TDinternal")
+            self.conn.run("git checkout develop")
+            self.conn.run("git pull")
+            self.conn.cd("/root/TDinternal/debug")
+            self.conn.run("cmake ..")
+            self.conn.run("make")
+            self.conn.run("make install")
+        except Exception as e:
+            print("Build Taosd error for node %d " % self.index)
+            logging.exception(e)
+            pass
+
     def startTaosd(self):
         try:
             self.conn.run("sudo systemctl start taosd")
@@ -50,7 +61,7 @@ class Node:
             self.conn.run("sudo systemctl restart taosd")
         except Exception as e:
             print("Stop Taosd error for node %d " % self.index)
-            logging.exception(e)
+            logging.exception(e)    
 
     def removeTaosd(self):
         try:
@@ -58,6 +69,19 @@ class Node:
         except Exception as e:
             print("remove taosd error for node %d " % self.index)
             logging.exception(e)
+    
+    def forceStopOneTaosd(self):
+        try:
+            self.conn.run("kill -9 $(ps -ax|grep taosd|awk '{print $1}')")
+        except Exception as e:
+            print("kill taosd error on node%d " % self.index)            
+    
+    def startOneTaosd(self):
+        try:
+            self.conn.run("nohup taosd -c /etc/taos/ > /dev/null 2>&1 &")
+        except Exception as e:
+            print("start taosd error on node%d " % self.index)
+            logging.exception(e)    
     
     def installTaosd(self, packagePath):
         self.conn.put(packagePath, self.homeDir)
@@ -105,98 +129,51 @@ class Node:
 
 class Nodes:
     def __init__(self):
-        self.node1 = Node(1, 'ubuntu', '192.168.1.52', 'node1', 'tbase125!', '/home/ubuntu')
-        self.node2 = Node(2, 'ubuntu', '192.168.1.53', 'node2', 'tbase125!', '/home/ubuntu')
-        self.node3 = Node(3, 'ubuntu', '192.168.1.54', 'node3', 'tbase125!', '/home/ubuntu')
+        self.tdnodes = []
+        self.tdnodes.append(Node(0, 'root', '52.143.103.7', 'node1', 'a', '/root/'))
+        self.tdnodes.append(Node(1, 'root', '52.250.48.222', 'node2', 'a', '/root/'))
+        self.tdnodes.append(Node(2, 'root', '51.141.167.23', 'node3', 'a', '/root/'))
+        self.tdnodes.append(Node(3, 'root', '52.247.207.173', 'node4', 'a', '/root/'))
+        self.tdnodes.append(Node(4, 'root', '51.141.166.100', 'node5', 'a', '/root/'))
+
+    def stopOneNode(self, index):
+        self.tdnodes[index].forceStopOneTaosd()
+    
+    def startOneNode(self, index):
+        self.tdnodes[index].startOneTaosd()
 
     def stopAllTaosd(self):
-        self.node1.stopTaosd()
-        self.node2.stopTaosd()
-        self.node3.stopTaosd()
-    
+        for i in range(len(self.tdnodes)):
+            self.tdnodes[i].stopTaosd()
+
     def startAllTaosd(self):
-        self.node1.startTaosd()
-        self.node2.startTaosd()
-        self.node3.startTaosd()
+        for i in range(len(self.tdnodes)):
+            self.tdnodes[i].startTaosd()                    
     
     def restartAllTaosd(self):
-        self.node1.restartTaosd()
-        self.node2.restartTaosd()
-        self.node3.restartTaosd()
+        for i in range(len(self.tdnodes)):
+            self.tdnodes[i].restartTaosd()       
     
     def addConfigs(self, configKey, configValue):          
-        self.node1.configTaosd(configKey, configValue)
-        self.node2.configTaosd(configKey, configValue)
-        self.node3.configTaosd(configKey, configValue)
+        for i in range(len(self.tdnodes)):
+            self.tdnodes[i].configTaosd(configKey, configValue)        
     
-    def removeConfigs(self, configKey, configValue):          
-        self.node1.removeTaosConfig(configKey, configValue)
-        self.node2.removeTaosConfig(configKey, configValue)
-        self.node3.removeTaosConfig(configKey, configValue)        
+    def removeConfigs(self, configKey, configValue): 
+        for i in range(len(self.tdnodes)):
+            self.tdnodes[i].removeTaosConfig(configKey, configValue)  
     
     def removeAllDataFiles(self):
-        self.node1.removeData()
-        self.node2.removeData()
-        self.node3.removeData()
+        for i in range(len(self.tdnodes)):
+            self.tdnodes[i].removeData()
 
-class ClusterTest:
-    def __init__(self, hostName):
-        self.host = hostName
-        self.user = "root"
-        self.password = "taosdata"
-        self.config = "/etc/taos"        
-        self.dbName = "mytest"
-        self.stbName = "meters"
-        self.numberOfThreads = 20
-        self.numberOfTables = 10000
-        self.numberOfRecords = 1000
-        self.tbPrefix = "t"
-        self.ts = 1538548685000
-        self.repeat = 1        
-
-    def connectDB(self):
-        self.conn = taos.connect(
-            host=self.host,
-            user=self.user,
-            password=self.password,
-            config=self.config)
-
-    def createSTable(self, replica):
-        cursor = self.conn.cursor()
-        tdLog.info("drop database if exists %s" % self.dbName)
-        cursor.execute("drop database if exists %s" % self.dbName)
-        tdLog.info("create database %s replica %d" % (self.dbName, replica))
-        cursor.execute("create database %s replica %d" % (self.dbName, replica))
-        tdLog.info("use %s" % self.dbName)
-        cursor.execute("use %s" % self.dbName)
-        tdLog.info("drop table if exists %s" % self.stbName)
-        cursor.execute("drop table if exists %s" % self.stbName)
-        tdLog.info("create table %s(ts timestamp, current float, voltage int, phase int) tags(id int)" % self.stbName)
-        cursor.execute("create table %s(ts timestamp, current float, voltage int, phase int) tags(id int)" % self.stbName)
-        cursor.close()
-
-    def insertData(self, threadID):
-        print("Thread %d: starting" % threadID)
-        cursor = self.conn.cursor()
-        tablesPerThread = int(self.numberOfTables / self.numberOfThreads)
-        baseTableID = tablesPerThread * threadID
-        for i in range (tablesPerThread):
-            cursor.execute("create table %s%d using %s tags(%d)" % (self.tbPrefix, baseTableID + i, self.stbName, baseTableID + i))            
-            query = "insert into %s%d values" % (self.tbPrefix, baseTableID + i)
-            base = self.numberOfRecords * i            
-            for j in range(self.numberOfRecords):
-                query += "(%d, %f, %d, %d)" % (self.ts + base + j, random.random(), random.randint(210, 230), random.randint(0, 10)) 
-            cursor.execute(query)      
-        cursor.close()
-        print("Thread %d: finishing" % threadID)
-    
-    def run(self):        
-        threads = []
-        tdLog.info("Inserting data")
-        for i in range(self.numberOfThreads):
-            thread = threading.Thread(target=self.insertData, args=(i,))
-            threads.append(thread)
-            thread.start()
-
-        for i in range(self.numberOfThreads):
-            threads[i].join()
+# kill taosd randomly every 10 mins
+nodes = Nodes()
+loop = 0
+while True:
+    loop = loop + 1    
+    index = random.randint(0, 4)
+    print("loop: %d, kill taosd on node%d" %(loop, index))
+    nodes.stopOneNode(index)
+    time.sleep(60)
+    nodes.startOneNode(index)
+    time.sleep(600)

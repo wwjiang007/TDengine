@@ -33,21 +33,22 @@ const char *argp_program_bug_address = "<support@taosdata.com>";
 static char doc[] = "";
 static char args_doc[] = "";
 static struct argp_option options[] = {
-  {"host",       'h', "HOST",       0,                   "TDengine server IP address to connect. The default host is localhost."},
+  {"host",       'h', "HOST",       0,                   "TDengine server FQDN to connect. The default host is localhost."},
   {"password",   'p', "PASSWORD",   OPTION_ARG_OPTIONAL, "The password to use when connecting to the server."},
   {"port",       'P', "PORT",       0,                   "The TCP/IP port number to use for the connection."},
   {"user",       'u', "USER",       0,                   "The user name to use when connecting to the server."},
   {"user",       'A', "Auth",       0,                   "The user auth to use when connecting to the server."},
   {"config-dir", 'c', "CONFIG_DIR", 0,                   "Configuration directory."},
+  {"dump-config", 'C', 0,           0,                   "Dump configuration."},
   {"commands",   's', "COMMANDS",   0,                   "Commands to run without enter the shell."},
   {"raw-time",   'r', 0,            0,                   "Output time as uint64_t."},
   {"file",       'f', "FILE",       0,                   "Script to run without enter the shell."},
   {"directory",  'D', "DIRECTORY",  0,                   "Use multi-thread to import all SQL files in the directory separately."},
   {"thread",     'T', "THREADNUM",  0,                   "Number of threads when using multi-thread to import data."},
+  {"check",      'k', "CHECK",      0,                   "Check tables."},
   {"database",   'd', "DATABASE",   0,                   "Database to use when connecting to the server."},
   {"timezone",   't', "TIMEZONE",   0,                   "Time zone of the shell, default is local."},
-  {"netrole",    'n', "NETROLE",    0,                   "Net role when network connectivity test, default is NULL, options: client|clients|server."},
-  {"endport",    'e', "ENDPORT",    0,                   "Net test end port, default is 6042."},
+  {"netrole",    'n', "NETROLE",    0,                   "Net role when network connectivity test, default is startup, options: client|server|rpc|startup|sync."},
   {"pktlen",     'l', "PKTLEN",     0,                   "Packet length used for net test, default is 1000 bytes."},
   {0}};
 
@@ -97,6 +98,9 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
       tstrncpy(configDir, full_path.we_wordv[0], TSDB_FILENAME_LEN);
       wordfree(&full_path);
       break;
+    case 'C':
+      arguments->dump_config = true;
+      break;
     case 's':
       arguments->commands = arg;
       break;
@@ -127,23 +131,15 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         return -1;
       }
       break;
+    case 'k':
+      arguments->check = atoi(arg);
+      break;
     case 'd':
       arguments->database = arg;
       break;
-
     case 'n':
       arguments->netTestRole = arg;
       break;
-
-    case 'e':
-      if (arg) {
-        arguments->endPort = atoi(arg);
-      } else {
-        fprintf(stderr, "Invalid end port\n");
-        return -1;
-      }
-      break;
-
     case 'l':
       if (arg) {
         arguments->pktLen = atoi(arg);
@@ -152,7 +148,6 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         return -1;
       }
       break;
-      
     case OPT_ABORT:
       arguments->abort = 1;
       break;
@@ -181,7 +176,7 @@ void shellParseArgument(int argc, char *argv[], SShellArguments *arguments) {
   }
 }
 
-void shellReadCommand(TAOS *con, char *command) {
+int32_t shellReadCommand(TAOS *con, char *command) {
   unsigned hist_counter = history.hend;
   char utf8_array[10] = "\0";
   Command cmd;
@@ -194,6 +189,10 @@ void shellReadCommand(TAOS *con, char *command) {
   char c;
   while (1) {
     c = (char)getchar(); // getchar() return an 'int' value
+
+    if (c == EOF) {
+      return c;
+    }
 
     if (c < 0) {  // For UTF-8
       int count = countPrefixOnes(c);
@@ -234,7 +233,7 @@ void shellReadCommand(TAOS *con, char *command) {
             sprintf(command, "%s%s", cmd.buffer, cmd.command);
             tfree(cmd.buffer);
             tfree(cmd.command);
-            return;
+            return 0;
           } else {
             updateBuffer(&cmd);
           }
@@ -325,6 +324,8 @@ void shellReadCommand(TAOS *con, char *command) {
       insertChar(&cmd, &c, 1);
     }
   }
+
+  return 0;
 }
 
 void *shellLoopQuery(void *arg) {
@@ -342,12 +343,17 @@ void *shellLoopQuery(void *arg) {
     uError("failed to malloc command");
     return NULL;
   }
+
+  int32_t err = 0;
   
   do {
     // Read command from shell.
     memset(command, 0, MAX_COMMAND_SIZE);
     set_terminal_mode();
-    shellReadCommand(con, command);
+    err = shellReadCommand(con, command);
+    if (err) {
+      break;
+    }
     reset_terminal_mode();
   } while (shellRunCommand(con, command) == 0);
   
@@ -413,7 +419,11 @@ void get_history_path(char *history) { snprintf(history, TSDB_FILENAME_LEN, "%s/
 
 void clearScreen(int ecmd_pos, int cursor_pos) {
   struct winsize w;
-  ioctl(0, TIOCGWINSZ, &w);
+  if (ioctl(0, TIOCGWINSZ, &w) < 0 || w.ws_col == 0 || w.ws_row == 0) {
+    //fprintf(stderr, "No stream device, and use default value(col 120, row 30)\n");
+    w.ws_col = 120;
+    w.ws_row = 30;
+  }
 
   int cursor_x = cursor_pos / w.ws_col;
   int cursor_y = cursor_pos % w.ws_col;
@@ -431,8 +441,9 @@ void clearScreen(int ecmd_pos, int cursor_pos) {
 void showOnScreen(Command *cmd) {
   struct winsize w;
   if (ioctl(0, TIOCGWINSZ, &w) < 0 || w.ws_col == 0 || w.ws_row == 0) {
-    fprintf(stderr, "No stream device\n");
-    exit(EXIT_FAILURE);
+    //fprintf(stderr, "No stream device\n");
+    w.ws_col = 120;
+    w.ws_row = 30;
   }
 
   wchar_t wc;

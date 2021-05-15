@@ -33,6 +33,7 @@
 #include "mnodeWrite.h"
 #include "mnodePeer.h"
 
+int64_t        tsUserRid = -1;
 static void *  tsUserSdb = NULL;
 static int32_t tsUserUpdateSize = 0;
 static int32_t mnodeGetUserMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn);
@@ -122,13 +123,12 @@ static void mnodePrintUserAuth() {
     mnodeDecUserRef(pUser);
   }
 
-  fflush(fp);
-  sdbFreeIter(pIter);
+  fsync(fileno(fp));
   fclose(fp);
 }
 
 static int32_t mnodeUserActionRestored() {
-  int32_t numOfRows = sdbGetNumOfRows(tsUserSdb);
+  int64_t numOfRows = sdbGetNumOfRows(tsUserSdb);
   if (numOfRows <= 0 && dnodeIsFirstDeploy()) {
     mInfo("dnode first deploy, create root user");
     SAcctObj *pAcct = mnodeGetAcct(TSDB_DEFAULT_USER);
@@ -148,14 +148,14 @@ static int32_t mnodeUserActionRestored() {
 
 int32_t mnodeInitUsers() {
   SUserObj tObj;
-  tsUserUpdateSize = (int8_t *)tObj.updateEnd - (int8_t *)&tObj;
+  tsUserUpdateSize = (int32_t)((int8_t *)tObj.updateEnd - (int8_t *)&tObj);
 
   SSdbTableDesc desc = {
     .id           = SDB_TABLE_USER,
     .name         = "users",
     .hashSessions = TSDB_DEFAULT_USERS_HASH_SIZE,
     .maxRowSize   = tsUserUpdateSize,
-    .refCountPos  = (int8_t *)(&tObj.refCount) - (int8_t *)&tObj,
+    .refCountPos  = (int32_t)((int8_t *)(&tObj.refCount) - (int8_t *)&tObj),
     .keyType      = SDB_KEY_STRING,
     .fpInsert     = mnodeUserActionInsert,
     .fpDelete     = mnodeUserActionDelete,
@@ -166,7 +166,8 @@ int32_t mnodeInitUsers() {
     .fpRestored   = mnodeUserActionRestored
   };
 
-  tsUserSdb = sdbOpenTable(&desc);
+  tsUserRid = sdbOpenTable(&desc);
+  tsUserSdb = sdbGetTableByRid(tsUserRid);
   if (tsUserSdb == NULL) {
     mError("table:%s, failed to create hash", desc.name);
     return -1;
@@ -177,6 +178,8 @@ int32_t mnodeInitUsers() {
   mnodeAddWriteMsgHandle(TSDB_MSG_TYPE_CM_DROP_USER, mnodeProcessDropUserMsg);
   mnodeAddShowMetaHandle(TSDB_MGMT_TABLE_USER, mnodeGetUserMeta);
   mnodeAddShowRetrieveHandle(TSDB_MGMT_TABLE_USER, mnodeRetrieveUsers);
+  mnodeAddShowFreeIterHandle(TSDB_MGMT_TABLE_USER, mnodeCancelGetNextUser);
+
   mnodeAddPeerMsgHandle(TSDB_MSG_TYPE_DM_AUTH, mnodeProcessAuthMsg);
    
   mDebug("table:%s, hash is created", desc.name);
@@ -184,7 +187,7 @@ int32_t mnodeInitUsers() {
 }
 
 void mnodeCleanupUsers() {
-  sdbCloseTable(tsUserSdb);
+  sdbCloseTable(tsUserRid);
   tsUserSdb = NULL;
 }
 
@@ -196,12 +199,16 @@ void *mnodeGetNextUser(void *pIter, SUserObj **pUser) {
   return sdbFetchRow(tsUserSdb, pIter, (void **)pUser); 
 }
 
+void mnodeCancelGetNextUser(void *pIter) {
+ sdbFreeIter(tsUserSdb, pIter);
+}
+
 void mnodeIncUserRef(SUserObj *pUser) { 
-  return sdbIncRef(tsUserSdb, pUser); 
+  sdbIncRef(tsUserSdb, pUser); 
 }
 
 void mnodeDecUserRef(SUserObj *pUser) { 
-  return sdbDecRef(tsUserSdb, pUser); 
+  sdbDecRef(tsUserSdb, pUser); 
 }
 
 static int32_t mnodeUpdateUser(SUserObj *pUser, void *pMsg) {
@@ -330,7 +337,7 @@ static int32_t mnodeGetUserMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pCo
   cols++;
 
   pMeta->numOfColumns = htons(cols);
-  strcpy(pMeta->tableId, "show users");
+  strcpy(pMeta->tableFname, "show users");
   pShow->numOfColumns = cols;
 
   pShow->offset[0] = 0;
@@ -554,7 +561,7 @@ static int32_t mnodeProcessDropUserMsg(SMnodeMsg *pMsg) {
 void mnodeDropAllUsers(SAcctObj *pAcct)  {
   void *    pIter = NULL;
   int32_t   numOfUsers = 0;
-  int32_t   acctNameLen = strlen(pAcct->user);
+  int32_t   acctNameLen = (int32_t)strlen(pAcct->user);
   SUserObj *pUser = NULL;
 
   while (1) {
@@ -573,8 +580,6 @@ void mnodeDropAllUsers(SAcctObj *pAcct)  {
 
     mnodeDecUserRef(pUser);
   }
-
-  sdbFreeIter(pIter);
 
   mDebug("acct:%s, all users:%d is dropped from sdb", pAcct->user, numOfUsers);
 }

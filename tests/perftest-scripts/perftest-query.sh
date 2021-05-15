@@ -39,7 +39,9 @@ function buildTDengine {
 	cd $WORK_DIR/TDengine
 
 	git remote update > /dev/null
-	REMOTE_COMMIT=`git rev-parse --short remotes/origin/develop`
+	git reset --hard HEAD
+	git checkout master
+	REMOTE_COMMIT=`git rev-parse --short remotes/origin/master`
 	LOCAL_COMMIT=`git rev-parse --short @`
 
 	echo " LOCAL: $LOCAL_COMMIT"
@@ -48,30 +50,38 @@ function buildTDengine {
 		echo "repo up-to-date"
 	else
 		echo "repo need to pull"
-		git pull > /dev/null
+		git pull > /dev/null 2>&1
 
 		LOCAL_COMMIT=`git rev-parse --short @`
 		cd debug
 		rm -rf *
 		cmake .. > /dev/null
-		make > /dev/null
-		make install
+		make && make install > /dev/null		
 	fi
 }
 
 function runQueryPerfTest {
 	[ -f $PERFORMANCE_TEST_REPORT ] && rm $PERFORMANCE_TEST_REPORT
 	nohup $WORK_DIR/TDengine/debug/build/bin/taosd -c /etc/taosperf/ > /dev/null 2>&1 &
-	echoInfo "Run Performance Test"
+	echoInfo "Wait TDengine to start"
+	sleep 300
+	echoInfo "Run Performance Test"	
 	cd $WORK_DIR/TDengine/tests/pytest
 	
-	python3 query/queryPerformance.py 0 | tee -a $PERFORMANCE_TEST_REPORT
+	python3 query/queryPerformance.py -c $LOCAL_COMMIT | tee -a $PERFORMANCE_TEST_REPORT
+
+	python3 insert/insertFromCSVPerformance.py -c $LOCAL_COMMIT | tee -a $PERFORMANCE_TEST_REPORT
+	
+	python3 tools/taosdemoPerformance.py -c $LOCAL_COMMIT | tee -a $PERFORMANCE_TEST_REPORT
+
+	python3 perfbenchmark/joinPerformance.py  | tee -a $PERFORMANCE_TEST_REPORT
+	
 }
 
 
 function sendReport {
 	echo "send report"
-	receiver="pxiao@taosdata.com"
+	receiver="develop@taosdata.com"
 	mimebody="MIME-Version: 1.0\nContent-Type: text/html; charset=utf-8\n"
 
 	cd $TDENGINE_DIR
@@ -87,6 +97,7 @@ function sendReport {
 stopTaosd
 buildTDengine
 runQueryPerfTest
+stopTaosd
 
 echoInfo "Send Report"
 sendReport

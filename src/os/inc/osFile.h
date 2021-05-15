@@ -20,29 +20,27 @@
 extern "C" {
 #endif
 
-#define tread(fd, buf, count) read(fd, buf, count)
-#define twrite(fd, buf, count) write(fd, buf, count)
-#define tlseek(fd, offset, whence) lseek(fd, offset, whence)
-#define tclose(fd)    \
-  {                       \
-    if (FD_VALID(fd)) {    \
-      close(fd);           \
-      fd = FD_INITIALIZER; \
-    }                     \
-  }
+#include "osSocket.h"
 
 int64_t taosReadImp(int32_t fd, void *buf, int64_t count);
 int64_t taosWriteImp(int32_t fd, void *buf, int64_t count);
 int64_t taosLSeekImp(int32_t fd, int64_t offset, int32_t whence);
 int32_t taosRenameFile(char *fullPath, char *suffix, char delimiter, char **dstPath);
+int64_t taosCopy(char *from, char *to);
 
 #define taosRead(fd, buf, count) taosReadImp(fd, buf, count)
 #define taosWrite(fd, buf, count) taosWriteImp(fd, buf, count)
 #define taosLSeek(fd, offset, whence) taosLSeekImp(fd, offset, whence)
-#define taosClose(x) tclose(x)
+#define taosClose(fd)      \
+  {                        \
+    if (FD_VALID(fd)) {    \
+      close(fd);           \
+      fd = FD_INITIALIZER; \
+    }                      \
+  }
 
 // TAOS_OS_FUNC_FILE_SENDIFLE
-int64_t taosSendFile(int32_t dfd, int32_t sfd, int64_t *offset, int64_t size);
+int64_t taosSendFile(SOCKET dfd, int32_t sfd, int64_t *offset, int64_t size);
 int64_t taosFSendFile(FILE *outfile, FILE *infile, int64_t *offset, int64_t size);
 
 #ifdef TAOS_RANDOM_FILE_FAIL

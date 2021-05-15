@@ -79,11 +79,11 @@ static int print_result(TAOS_RES* res, int blockFetch) {
   if (blockFetch) {
     int rows = 0;
     while ((rows = taos_fetch_block(res, &row))) {
-      for (int i = 0; i < rows; i++) {
-        char temp[256];
-        taos_print_row(temp, row + i, fields, num_fields);
-        puts(temp);
-      }
+      //for (int i = 0; i < rows; i++) {
+      //  char temp[256];
+      //  taos_print_row(temp, row + i, fields, num_fields);
+      //  puts(temp);
+      //}
       nRows += rows;
     }
   } else {
@@ -435,11 +435,15 @@ void verify_async(TAOS* taos) {
 }
 
 void stream_callback(void *param, TAOS_RES *res, TAOS_ROW row) {
+  if (res == NULL || row == NULL) {
+    return;
+  }
+  
   int         num_fields = taos_num_fields(res);
   TAOS_FIELD* fields = taos_fetch_fields(res);
 
   printf("got one row from stream_callback\n");
-  char temp[256];
+  char temp[256] = {0};
   taos_print_row(temp, row, fields, num_fields);
   puts(temp);
 }
@@ -467,7 +471,6 @@ int main(int argc, char *argv[]) {
   const char* passwd = "taosdata";
 
   taos_options(TSDB_OPTION_TIMEZONE, "GMT-8");
-  taos_init();
 
   TAOS* taos = taos_connect(host, user, passwd, "", 0);
   if (taos == NULL) {

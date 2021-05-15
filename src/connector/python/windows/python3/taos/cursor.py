@@ -1,7 +1,6 @@
 from .cinterface import CTaosInterface
 from .error import *
 from .constants import FieldType
-import threading
 
 # querySeqNum = 0
 
@@ -24,11 +23,11 @@ class TDengineCursor(object):
             if the cursor has not had an operation invoked via the .execute*() method yet.
 
         .rowcount:This read-only attribute specifies the number of rows that the last
-            .execute*() produced (for DQL statements like SELECT) or affected 
+            .execute*() produced (for DQL statements like SELECT) or affected
     """
 
     def __init__(self, connection=None):
-        self._description = None
+        self._description = []
         self._rowcount = -1
         self._connection = None
         self._result = None
@@ -38,7 +37,6 @@ class TDengineCursor(object):
         self._block_iter = 0
         self._affected_rows = 0
         self._logfile = ""
-        self._threadId = threading.get_ident()
 
         if connection is not None:
             self._connection = connection
@@ -51,13 +49,14 @@ class TDengineCursor(object):
             raise OperationalError("Invalid use of fetch iterator")
 
         if self._block_rows <= self._block_iter:
-            block, self._block_rows = CTaosInterface.fetchBlock(self._result, self._fields)
+            block, self._block_rows = CTaosInterface.fetchRow(
+                self._result, self._fields)
             if self._block_rows == 0:
                 raise StopIteration
             self._block = list(map(tuple, zip(*block)))
             self._block_iter = 0
 
-        data =  self._block[self._block_iter]
+        data = self._block[self._block_iter]
         self._block_iter += 1
 
         return data
@@ -92,7 +91,7 @@ class TDengineCursor(object):
         """
         if self._connection is None:
             return False
-        
+
         self._reset_result()
         self._connection = None
 
@@ -107,24 +106,25 @@ class TDengineCursor(object):
         if not self._connection:
             # TODO : change the exception raised here
             raise ProgrammingError("Cursor is not connected")
-        
+
         self._reset_result()
 
         stmt = operation
         if params is not None:
             pass
-        
+
         self._result = CTaosInterface.query(self._connection._conn, stmt)
         errno = CTaosInterface.libtaos.taos_errno(self._result)
         if errno == 0:
             if CTaosInterface.fieldsCount(self._result) == 0:
-                self._affected_rows += CTaosInterface.affectedRows(self._result )
-                return CTaosInterface.affectedRows(self._result )
+                self._affected_rows += CTaosInterface.affectedRows(
+                    self._result)
+                return CTaosInterface.affectedRows(self._result)
             else:
-                self._fields = CTaosInterface.useResult(self._result )
+                self._fields = CTaosInterface.useResult(self._result)
                 return self._handle_result()
         else:
-            raise ProgrammingError(CTaosInterface.errStr(self._result ), errno)
+            raise ProgrammingError(CTaosInterface.errStr(self._result), errno)
 
     def executemany(self, operation, seq_of_parameters):
         """Prepare a database operation (query or command) and then execute it against all parameter sequences or mappings found in the sequence seq_of_parameters.
@@ -139,28 +139,50 @@ class TDengineCursor(object):
     def fetchmany(self):
         pass
 
-    def fetchall(self):
+    def fetchall_row(self):
         """Fetch all (remaining) rows of a query result, returning them as a sequence of sequences (e.g. a list of tuples). Note that the cursor's arraysize attribute can affect the performance of this operation.
         """
         if self._result is None or self._fields is None:
             raise OperationalError("Invalid use of fetchall")
-        
+
         buffer = [[] for i in range(len(self._fields))]
         self._rowcount = 0
         while True:
-            block, num_of_fields = CTaosInterface.fetchBlock(self._result, self._fields)
+            block, num_of_fields = CTaosInterface.fetchRow(
+                self._result, self._fields)
             errno = CTaosInterface.libtaos.taos_errno(self._result)
             if errno != 0:
-                raise ProgrammingError(CTaosInterface.errStr(self._result), errno)
-            if num_of_fields == 0: break
+                raise ProgrammingError(
+                    CTaosInterface.errStr(
+                        self._result), errno)
+            if num_of_fields == 0:
+                break
+            self._rowcount += num_of_fields
+            for i in range(len(self._fields)):
+                buffer[i].extend(block[i])
+        return list(map(tuple, zip(*buffer)))
+
+    def fetchall(self):
+        if self._result is None or self._fields is None:
+            raise OperationalError("Invalid use of fetchall")
+
+        buffer = [[] for i in range(len(self._fields))]
+        self._rowcount = 0
+        while True:
+            block, num_of_fields = CTaosInterface.fetchBlock(
+                self._result, self._fields)
+            errno = CTaosInterface.libtaos.taos_errno(self._result)
+            if errno != 0:
+                raise ProgrammingError(
+                    CTaosInterface.errStr(
+                        self._result), errno)
+            if num_of_fields == 0:
+                break
             self._rowcount += num_of_fields
             for i in range(len(self._fields)):
                 buffer[i].extend(block[i])
 
-        
         return list(map(tuple, zip(*buffer)))
-
-
 
     def nextset(self):
         """
@@ -176,7 +198,7 @@ class TDengineCursor(object):
     def _reset_result(self):
         """Reset the result to unused version.
         """
-        self._description = None
+        self._description = []
         self._rowcount = -1
         if self._result is not None:
             CTaosInterface.freeResult(self._result)
@@ -186,12 +208,13 @@ class TDengineCursor(object):
         self._block_rows = -1
         self._block_iter = 0
         self._affected_rows = 0
-    
+
     def _handle_result(self):
         """Handle the return result from query.
         """
         self._description = []
         for ele in self._fields:
-            self._description.append((ele['name'], ele['type'], None, None, None, None, False))
-        
+            self._description.append(
+                (ele['name'], ele['type'], None, None, None, None, False))
+
         return self._result
