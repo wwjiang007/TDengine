@@ -460,8 +460,8 @@ void tscProcessMsgFromServer(SRpcMsg *rpcMsg, SRpcEpSet *pEpSet) {
   
 
   if (shouldFree) { // in case of table-meta/vgrouplist query, automatically free it
-    taosRemoveRef(tscObjRef, handle);
     tscDebug("0x%"PRIx64" sqlObj is automatically freed", pSql->self);
+    taosRemoveRef(tscObjRef, handle);
   }
 
   taosReleaseRef(tscObjRef, handle);
@@ -2020,8 +2020,9 @@ int tscProcessTableMetaRsp(SSqlObj *pSql) {
     }
   }
 
-  tscDebug("0x%"PRIx64" recv table meta, uid:%" PRIu64 ", tid:%d, name:%s", pSql->self, pTableMeta->id.uid, pTableMeta->id.tid,
-           tNameGetTableName(&pTableMetaInfo->name));
+  tscDebug("0x%"PRIx64" recv table meta, uid:%" PRIu64 ", tid:%d, name:%s, numOfCols:%d, numOfTags:%d", pSql->self,
+      pTableMeta->id.uid, pTableMeta->id.tid, tNameGetTableName(&pTableMetaInfo->name), pTableMeta->tableInfo.numOfColumns,
+      pTableMeta->tableInfo.numOfTags);
 
   free(pTableMeta);
   return TSDB_CODE_SUCCESS;
@@ -2164,8 +2165,7 @@ int tscProcessSTableVgroupRsp(SSqlObj *pSql) {
 
     pInfo->vgroupList->numOfVgroups = pVgroupMsg->numOfVgroups;
     if (pInfo->vgroupList->numOfVgroups <= 0) {
-      //tfree(pInfo->vgroupList);
-      tscError("0x%"PRIx64" empty vgroup info", pSql->self);
+      tscDebug("0x%"PRIx64" empty vgroup info", pSql->self);
     } else {
       for (int32_t j = 0; j < pInfo->vgroupList->numOfVgroups; ++j) {
         // just init, no need to lock
@@ -2517,7 +2517,7 @@ static int32_t getTableMetaFromMnode(SSqlObj *pSql, STableMetaInfo *pTableMetaIn
   pNew->fp = tscTableMetaCallBack;
   pNew->param = (void *)pSql->self;
 
-  tscDebug("0x%"PRIx64" metaRid from %" PRId64 " to %" PRId64 , pSql->self, pSql->metaRid, pNew->self);
+  tscDebug("0x%"PRIx64" metaRid from %" PRId64 " to 0x%" PRIx64 , pSql->self, pSql->metaRid, pNew->self);
   
   pSql->metaRid = pNew->self;
 

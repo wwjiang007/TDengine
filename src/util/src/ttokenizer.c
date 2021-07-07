@@ -275,6 +275,10 @@ static int32_t tKeywordCode(const char* z, int n) {
     }
   }
 
+  if (keywordHashTable == NULL) {
+    return TK_ILLEGAL;
+  }
+  
   SKeyword** pKey = (SKeyword**)taosHashGet(keywordHashTable, key, n);
   return (pKey != NULL)? (*pKey)->type:TK_ID;
 }
@@ -663,4 +667,16 @@ void taosCleanupKeywordsTable() {
   if (m != NULL && atomic_val_compare_exchange_ptr(&keywordHashTable, m, 0) == m) {
     taosHashCleanup(m);
   }
+}
+
+SStrToken taosTokenDup(SStrToken* pToken, char* buf, int32_t len) {
+  assert(pToken != NULL && buf != NULL);
+  SStrToken token = *pToken;
+  token.z = buf;
+
+  assert(len > token.n);
+  strncpy(token.z, pToken->z, pToken->n);
+  token.z[token.n] = 0;
+
+  return token;
 }
