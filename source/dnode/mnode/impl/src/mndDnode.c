@@ -657,6 +657,10 @@ static int32_t mndProcessStatusReq(SRpcMsg *pReq) {
       }
     }
   }
+  if (pDnode) {
+    pDnode->numOfDiskCfg = statusReq.numOfDiskCfg;
+    pDnode->memAvail = statusReq.memAvail;
+  }
 
   pMnode->ipWhiteVer = mndGetIpWhiteVer(pMnode);
 
@@ -779,8 +783,6 @@ static int32_t mndProcessStatusReq(SRpcMsg *pReq) {
     pDnode->rebootTime = statusReq.rebootTime;
     pDnode->numOfCores = statusReq.numOfCores;
     pDnode->numOfSupportVnodes = statusReq.numOfSupportVnodes;
-    pDnode->numOfDiskCfg = statusReq.numOfDiskCfg;
-    pDnode->memAvail = statusReq.memAvail;
     pDnode->memTotal = statusReq.memTotal;
     pDnode->encryptionKeyStat = statusReq.clusterCfg.encryptionKeyStat;
     pDnode->encryptionKeyChksum = statusReq.clusterCfg.encryptionKeyChksum;

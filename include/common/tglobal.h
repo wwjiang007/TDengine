@@ -49,6 +49,7 @@ extern char     tsLocalEp[];
 extern char     tsVersionName[];
 extern uint16_t tsServerPort;
 extern int32_t  tsVersion;
+extern int32_t  tsVersionCompatible;
 extern int32_t  tsStatusInterval;
 extern int32_t  tsNumOfSupportVnodes;
 extern char     tsEncryptAlgorithm[];

@@ -139,6 +139,7 @@ typedef struct {
 } STscNotifyInfo;
 
 typedef STscNotifyInfo SPassInfo;
+typedef STscNotifyInfo SSysConfigInfo;
 
 typedef struct {
   int64_t            ver;
@@ -168,6 +169,7 @@ typedef struct STscObj {
   SPassInfo      passInfo;
   SWhiteListInfo whiteListInfo;
   STscNotifyInfo userDroppedInfo;
+  SSysConfigInfo sysConfigInfo;
 } STscObj;
 
 typedef struct STscDbg {

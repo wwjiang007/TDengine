@@ -97,10 +97,8 @@ static void dmProcessRpcMsg(SDnode *pDnode, SRpcMsg *pRpc, SEpSet *pEpSet) {
   dGTrace("msg:%s is received, handle:%p len:%d code:0x%x app:%p refId:%" PRId64, TMSG_INFO(pRpc->msgType),
           pRpc->info.handle, pRpc->contLen, pRpc->code, pRpc->info.ahandle, pRpc->info.refId);
 
-  int32_t svrVer = 0;
-  taosVersionStrToInt(version, &svrVer);
-  if (0 != taosCheckVersionCompatible(pRpc->info.cliVer, svrVer, 3)) {
-    dError("Version not compatible, cli ver: %d, svr ver: %d", pRpc->info.cliVer, svrVer);
+  if (0 != taosCheckVersionCompatible(pRpc->info.cliVer, tsVersionCompatible, 3)) {
+    dError("Version not compatible, cli ver: %d, svr ver: %d", pRpc->info.cliVer, tsVersionCompatible);
     goto _OVER;
   }
 

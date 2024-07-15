@@ -338,7 +338,7 @@ int32_t cfgSetItem(SConfig *pCfg, const char *name, const char *value, ECfgSrcTy
   SConfigItem *pItem = cfgGetItem(pCfg, name);
   if (pItem == NULL) {
     terrno = TSDB_CODE_CFG_NOT_FOUND;
-    taosThreadMutexUnlock(&pCfg->lock);
+    if (lock) taosThreadMutexUnlock(&pCfg->lock);
     return -1;
   }
 
@@ -401,6 +401,7 @@ SConfigItem *cfgGetItem(SConfig *pCfg, const char *pName) {
     if (strcasecmp(pItem->name, pName) == 0) {
       return pItem;
     }
+    printf("%d: pItem->name: %s\n", i, pItem->name);
   }
 
   terrno = TSDB_CODE_CFG_NOT_FOUND;

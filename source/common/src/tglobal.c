@@ -39,6 +39,7 @@ char          tsLocalEp[TSDB_EP_LEN] = {0};  // Local End Point, hostname:port
 char          tsVersionName[16] = "community";
 uint16_t      tsServerPort = 6030;
 int32_t       tsVersion = 30000000;
+int32_t       tsVersionCompatible = 30000000;
 int32_t       tsStatusInterval = 1;  // second
 int32_t       tsNumOfSupportVnodes = 256;
 char          tsEncryptAlgorithm[16] = {0};
@@ -588,7 +589,7 @@ static int32_t taosAddSystemCfg(SConfig *pCfg) {
   if (cfgAddLocale(pCfg, "locale", tsLocale, CFG_SCOPE_BOTH, CFG_DYN_CLIENT) != 0) return -1;
   if (cfgAddCharset(pCfg, "charset", tsCharset, CFG_SCOPE_BOTH, CFG_DYN_NONE) != 0) return -1;
   if (cfgAddBool(pCfg, "assert", tsAssert, CFG_SCOPE_BOTH, CFG_DYN_CLIENT) != 0) return -1;
-  if (cfgAddBool(pCfg, "enableCoreFile", 1, CFG_SCOPE_BOTH, CFG_DYN_CLIENT) != 0) return -1;
+  if (cfgAddBool(pCfg, "enableCoreFile", tsEnableCoreFile, CFG_SCOPE_BOTH, CFG_DYN_CLIENT) != 0) return -1;
   if (cfgAddFloat(pCfg, "numOfCores", tsNumOfCores, 1, 100000, CFG_SCOPE_BOTH, CFG_DYN_NONE) != 0) return -1;
 
   if (cfgAddBool(pCfg, "ssd42", tsSSE42Supported, CFG_SCOPE_BOTH, CFG_DYN_NONE) != 0) return -1;
@@ -743,7 +744,7 @@ static int32_t taosAddServerCfg(SConfig *pCfg) {
   if (cfgAddInt32(pCfg, "s3MigrateIntervalSec", tsS3MigrateIntervalSec, 600, 100000, CFG_SCOPE_SERVER, CFG_DYN_ENT_SERVER) != 0) return -1;
   if (cfgAddBool(pCfg, "s3MigrateEnabled", tsS3MigrateEnabled, CFG_SCOPE_SERVER, CFG_DYN_ENT_SERVER) != 0) return -1;
   if (cfgAddInt32(pCfg, "uptimeInterval", tsUptimeInterval, 1, 100000, CFG_SCOPE_SERVER, CFG_DYN_NONE) != 0) return -1;
-  if (cfgAddInt32(pCfg, "queryRsmaTolerance", tsQueryRsmaTolerance, 0, 900000, CFG_SCOPE_SERVER, CFG_DYN_NONE) != 0) return -1;
+  if (cfgAddInt32(pCfg, "queryRsmaTolerance", tsQueryRsmaTolerance, 0, 900000, CFG_SCOPE_SERVER, CFG_DYN_ENT_SERVER) != 0) return -1;
   if (cfgAddInt32(pCfg, "timeseriesThreshold", tsTimeSeriesThreshold, 0, 2000, CFG_SCOPE_SERVER, CFG_DYN_ENT_SERVER) != 0) return -1;
 
   if (cfgAddInt64(pCfg, "walFsyncDataSizeLimit", tsWalFsyncDataSizeLimit, 100 * 1024 * 1024, INT64_MAX, CFG_SCOPE_SERVER, CFG_DYN_NONE) != 0) return -1;
@@ -1103,8 +1104,8 @@ static void taosSetSystemCfg(SConfig *pCfg) {
   taosSetSystemLocale(locale, charset);
   osSetSystemLocale(locale, charset);
 
-  bool enableCore = cfgGetItem(pCfg, "enableCoreFile")->bval;
-  taosSetCoreDump(enableCore);
+  tsEnableCoreFile = cfgGetItem(pCfg, "enableCoreFile")->bval;
+  taosSetCoreDump(tsEnableCoreFile);
 
   tsAssert = cfgGetItem(pCfg, "assert")->bval;
 
@@ -1503,6 +1504,7 @@ static int32_t taosCfgDynamicOptionsForServer(SConfig *pCfg, const char *name) {
   if (!pItem || (pItem->dynScope & CFG_DYN_SERVER) == 0) {
     uError("failed to config:%s, not support", name);
     terrno = TSDB_CODE_INVALID_CFG;
+    assert(0);
 
     cfgUnLock(pCfg);
     return -1;
@@ -1564,6 +1566,7 @@ static int32_t taosCfgDynamicOptionsForServer(SConfig *pCfg, const char *name) {
                                          {"mqRebalanceInterval", &tsMqRebalanceInterval},
                                          {"numOfLogLines", &tsNumOfLogLines},
                                          {"queryRspPolicy", &tsQueryRspPolicy},
+                                         {"queryRsmaTolerance", &tsQueryRsmaTolerance},
                                          {"timeseriesThreshold", &tsTimeSeriesThreshold},
                                          {"tmqMaxTopicNum", &tmqMaxTopicNum},
                                          {"tmqRowSize", &tmqRowSize},
@@ -1622,9 +1625,9 @@ static int32_t taosCfgDynamicOptionsForClient(SConfig *pCfg, const char *name) {
     }
     case 'e': {
       if (strcasecmp("enableCoreFile", name) == 0) {
-        bool enableCore = pItem->bval;
-        taosSetCoreDump(enableCore);
-        uInfo("%s set to %d", name, enableCore);
+        tsEnableCoreFile = pItem->bval;
+        taosSetCoreDump(tsEnableCoreFile);
+        uInfo("%s set to %d", name, tsEnableCoreFile);
         matched = true;
       }
       break;
@@ -1780,7 +1783,7 @@ static int32_t taosCfgDynamicOptionsForClient(SConfig *pCfg, const char *name) {
                                          {"compressMsgSize", &tsCompressMsgSize},
                                          {"countAlwaysReturnValue", &tsCountAlwaysReturnValue},
                                          {"crashReporting", &tsEnableCrashReport},
-                                         {"enableCoreFile", &tsAsyncLog},
+                                         {"enableCoreFile", &tsEnableCoreFile},
                                          {"enableQueryHb", &tsEnableQueryHb},
                                          {"keepColumnName", &tsKeepColumnName},
                                          {"keepAliveIdle", &tsKeepAliveIdle},

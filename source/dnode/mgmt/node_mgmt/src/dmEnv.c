@@ -18,6 +18,7 @@
 #include "audit.h"
 #include "libs/function/tudf.h"
 #include "tgrant.h"
+#include "tversion.h"
 
 #define DM_INIT_AUDIT()              \
   do {                               \
@@ -46,6 +47,9 @@ static int32_t dmInitSystem() {
   taosIgnSIGPIPE();
   taosBlockSIGPIPE();
   taosResolveCRC();
+  if (taosVersionStrToInt(version, &tsVersionCompatible) != 0) {
+    return -1;
+  }
   return 0;
 }
 
