@@ -19,8 +19,8 @@
 #include "audit.h"
 #include "libs/function/tudf.h"
 #include "tgrant.h"
-
 #include "tcompare.h"
+#include "tversion.h"
 // clang-format on
 
 #define DM_INIT_AUDIT()                       \
