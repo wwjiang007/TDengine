@@ -543,7 +543,8 @@ static inline int32_t taosBuildLogHead(char *buffer, const char *flags) {
 }
 
 static inline void taosPrintLogImp(ELogLevel level, int32_t dflag, const char *buffer, int32_t len) {
-  if ((dflag & DEBUG_FILE) && tsLogObj.logHandle && tsLogObj.logHandle->pFile != NULL && osLogSpaceAvailable()) {
+  if ((tsDump ? ((level <= DEBUG_ERROR) && (dflag & DEBUG_ERROR)) : (dflag & DEBUG_FILE)) && tsLogObj.logHandle &&
+      tsLogObj.logHandle->pFile != NULL && osLogSpaceAvailable()) {
     taosUpdateLogNums(level);
     if (tsAsyncLog) {
       taosPushLogBuffer(tsLogObj.logHandle, buffer, len);

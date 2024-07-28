@@ -50,6 +50,7 @@ EEncryptScope tsiEncryptScope = 0;
 char tsEncryptKey[17] = {0};
 
 // common
+bool    tsDump = false;  // dump commands don't output to log file
 int32_t tsMaxShellConns = 50000;
 int32_t tsShellActivityTimer = 3;  // second
 
@@ -1273,7 +1274,7 @@ int32_t taosCreateLog(const char *logname, int32_t logFileNum, const char *cfgDi
       return -1;
     }
   } else {
-    tsLogEmbedded = 1;
+    if (!tsDump) tsLogEmbedded = 1;
     if (taosAddClientLogCfg(pCfg) != 0) {
       cfgCleanup(pCfg);
       return -1;

@@ -59,6 +59,7 @@ extern EEncryptScope  tsiEncryptScope;
 extern char     tsEncryptKey[];
 
 // common
+extern bool    tsDump;
 extern int32_t tsMaxShellConns;
 extern int32_t tsShellActivityTimer;
 extern int32_t tsCompressMsgSize;
