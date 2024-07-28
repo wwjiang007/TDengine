@@ -579,7 +579,7 @@ static int32_t taosAddSystemCfg(SConfig *pCfg) {
   TAOS_CHECK_RETURN(cfgAddLocale(pCfg, "locale", tsLocale, CFG_SCOPE_BOTH, CFG_DYN_CLIENT));
   TAOS_CHECK_RETURN(cfgAddCharset(pCfg, "charset", tsCharset, CFG_SCOPE_BOTH, CFG_DYN_NONE));
   TAOS_CHECK_RETURN(cfgAddBool(pCfg, "assert", tsAssert, CFG_SCOPE_BOTH, CFG_DYN_CLIENT));
-  TAOS_CHECK_RETURN(cfgAddBool(pCfg, "enableCoreFile", 1, CFG_SCOPE_BOTH, CFG_DYN_CLIENT));
+  TAOS_CHECK_RETURN(cfgAddBool(pCfg, "enableCoreFile", tsEnableCoreFile, CFG_SCOPE_BOTH, CFG_DYN_CLIENT));
   TAOS_CHECK_RETURN(cfgAddFloat(pCfg, "numOfCores", tsNumOfCores, 1, 100000, CFG_SCOPE_BOTH, CFG_DYN_NONE));
 
   TAOS_CHECK_RETURN(cfgAddBool(pCfg, "ssd42", tsSSE42Supported, CFG_SCOPE_BOTH, CFG_DYN_NONE));

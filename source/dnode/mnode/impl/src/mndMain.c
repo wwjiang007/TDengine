@@ -119,7 +119,7 @@ static void mndPullupTtl(SMnode *pMnode) {
 }
 
 static void mndPullupTrimDb(SMnode *pMnode) {
-  mTrace("pullup s3migrate");
+  mTrace("pullup trim");
   int32_t contLen = 0;
   void   *pReq = mndBuildTimerMsg(&contLen);
   SRpcMsg rpcMsg = {.msgType = TDMT_MND_TRIM_DB_TIMER, .pCont = pReq, .contLen = contLen};
@@ -127,7 +127,7 @@ static void mndPullupTrimDb(SMnode *pMnode) {
 }
 
 static void mndPullupS3MigrateDb(SMnode *pMnode) {
-  mTrace("pullup trim");
+  mTrace("pullup s3migrate");
   int32_t contLen = 0;
   void   *pReq = mndBuildTimerMsg(&contLen);
   SRpcMsg rpcMsg = {.msgType = TDMT_MND_S3MIGRATE_DB_TIMER, .pCont = pReq, .contLen = contLen};
