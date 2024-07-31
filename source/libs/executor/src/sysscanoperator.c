@@ -862,6 +862,11 @@ _end:
   }
 }
 
+static SSDataBlock* sysTableScanFsets(SOperatorInfo* pOperator) {
+  ASSERTS(0, "scan fsets not implemented yet");
+  return NULL;
+}
+
 int32_t convertTagDataToStr(char* str, int type, void* buf, int32_t bufSize, int32_t* len) {
   int32_t n = 0;
 
@@ -1916,6 +1921,8 @@ static int32_t doSysTableScanNext(SOperatorInfo* pOperator, SSDataBlock** ppRes)
     } else if (strncasecmp(name, TSDB_INS_TABLE_STABLES, TSDB_TABLE_FNAME_LEN) == 0 && pInfo->showRewrite &&
                IS_SYS_DBNAME(dbName)) {
       pBlock = sysTableScanUserSTables(pOperator);
+    } else if (strncasecmp(name, TSDB_INS_TABLE_FSETS, TSDB_TABLE_FNAME_LEN) == 0) {
+      pBlock = sysTableScanFsets(pOperator);
     } else {  // load the meta from mnode of the given epset
       pBlock = sysTableScanFromMNode(pOperator, pInfo, name, pTaskInfo);
     }
