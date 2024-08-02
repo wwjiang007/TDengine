@@ -135,7 +135,7 @@ int32_t tsdbDataFileReaderOpen(const char *fname[], const SDataFileReaderConfig 
     for (int32_t i = 0; i < TSDB_FTYPE_MAX; ++i) {
       if (config->files[i].exist) {
         char fname1[TSDB_FILENAME_LEN];
-        tsdbTFileName(config->tsdb, &config->files[i].file, fname1);
+        (void)tsdbTFileName(config->tsdb, &config->files[i].file, fname1);
         int32_t lcn = config->files[i].file.lcn;
         TAOS_CHECK_GOTO(tsdbOpenFile(fname1, config->tsdb, TD_FILE_READ, &reader[0]->fd[i], lcn), &lino, _exit);
       }
@@ -230,7 +230,7 @@ int32_t tsdbDataFileReadBrinBlock(SDataFileReader *reader, const SBrinBlk *brinB
 
   // decode brin block
   SBufferReader br = BUFFER_READER_INITIALIZER(0, buffer);
-  tBrinBlockClear(brinBlock);
+  (void)tBrinBlockClear(brinBlock);
   brinBlock->numOfPKs = brinBlk->numOfPKs;
   brinBlock->numOfRecords = brinBlk->numRec;
   for (int32_t i = 0; i < 10; i++) {  // int64_t
@@ -667,18 +667,18 @@ static int32_t tsdbDataFileWriterCloseAbort(SDataFileWriter *writer) {
 
 static int32_t tsdbDataFileWriterDoClose(SDataFileWriter *writer) {
   if (writer->ctx->reader) {
-    tsdbDataFileReaderClose(&writer->ctx->reader);
+    (void)tsdbDataFileReaderClose(&writer->ctx->reader);
   }
 
   tTombBlockDestroy(writer->tombBlock);
   TARRAY2_DESTROY(writer->tombBlkArray, NULL);
   tBlockDataDestroy(writer->blockData);
-  tBrinBlockDestroy(writer->brinBlock);
+  (void)tBrinBlockDestroy(writer->brinBlock);
   TARRAY2_DESTROY(writer->brinBlkArray, NULL);
 
   tTombBlockDestroy(writer->ctx->tombBlock);
   tBlockDataDestroy(writer->ctx->blockData);
-  tBrinBlockDestroy(writer->ctx->brinBlock);
+  (void)tBrinBlockDestroy(writer->ctx->brinBlock);
 
   for (int32_t i = 0; i < ARRAY_SIZE(writer->local); ++i) {
     tBufferDestroy(writer->local + i);
@@ -838,7 +838,7 @@ int32_t tsdbFileWriteBrinBlock(STsdbFD *fd, SBrinBlock *brinBlock, uint32_t cmpr
   for (int i = 0; i < brinBlock->numOfRecords; i++) {
     SBrinRecord record;
 
-    tBrinBlockGet(brinBlock, i, &record);
+    (void)tBrinBlockGet(brinBlock, i, &record);
     if (i == 0) {
       brinBlk.minTbid.suid = record.suid;
       brinBlk.minTbid.uid = record.uid;
@@ -857,7 +857,7 @@ int32_t tsdbFileWriteBrinBlock(STsdbFD *fd, SBrinBlock *brinBlock, uint32_t cmpr
     }
   }
 
-  tsdbWriterUpdVerRange(range, brinBlk.minVer, brinBlk.maxVer);
+  (void)tsdbWriterUpdVerRange(range, brinBlk.minVer, brinBlk.maxVer);
 
   // write to file
   for (int32_t i = 0; i < 10; ++i) {
@@ -918,7 +918,7 @@ int32_t tsdbFileWriteBrinBlock(STsdbFD *fd, SBrinBlock *brinBlock, uint32_t cmpr
   // append to brinBlkArray
   TAOS_CHECK_RETURN(TARRAY2_APPEND_PTR(brinBlkArray, &brinBlk));
 
-  tBrinBlockClear(brinBlock);
+  (void)tBrinBlockClear(brinBlock);
 
   return 0;
 }
@@ -1018,7 +1018,7 @@ static int32_t tsdbDataFileDoWriteBlockData(SDataFileWriter *writer, SBlockData 
     }
   }
 
-  tsdbWriterUpdVerRange(&writer->ctx->range, record->minVer, record->maxVer);
+  (void)tsdbWriterUpdVerRange(&writer->ctx->range, record->minVer, record->maxVer);
 
   code = metaGetColCmpr(writer->config->tsdb->pVnode->pMeta, bData->suid != 0 ? bData->suid : bData->uid,
                         &cmprInfo.pColCmpr);
@@ -1147,7 +1147,7 @@ static int32_t tsdbDataFileDoWriteTableOldData(SDataFileWriter *writer, const ST
 
       for (; writer->ctx->brinBlockIdx < writer->ctx->brinBlock->numOfRecords; writer->ctx->brinBlockIdx++) {
         SBrinRecord record;
-        tBrinBlockGet(writer->ctx->brinBlock, writer->ctx->brinBlockIdx, &record);
+        (void)tBrinBlockGet(writer->ctx->brinBlock, writer->ctx->brinBlockIdx, &record);
         if (record.uid != writer->ctx->tbid->uid) {
           writer->ctx->tbHasOldData = false;
           goto _exit;
@@ -1157,7 +1157,7 @@ static int32_t tsdbDataFileDoWriteTableOldData(SDataFileWriter *writer, const ST
           goto _exit;
         } else {
           SBrinRecord record[1];
-          tBrinBlockGet(writer->ctx->brinBlock, writer->ctx->brinBlockIdx, record);
+          (void)tBrinBlockGet(writer->ctx->brinBlock, writer->ctx->brinBlockIdx, record);
           if (tsdbRowKeyCmprNullAsLargest(key, &record->lastKey) > 0) {  // key > record->lastKey
             if (writer->blockData->nRow > 0) {
               TAOS_CHECK_GOTO(tsdbDataFileDoWriteBlockData(writer, writer->blockData), &lino, _exit);
@@ -1351,7 +1351,7 @@ int32_t tsdbFileWriteTombBlock(STsdbFD *fd, STombBlock *tombBlock, int8_t cmprAl
   };
   for (int i = 0; i < TOMB_BLOCK_SIZE(tombBlock); i++) {
     STombRecord record;
-    tTombBlockGet(tombBlock, i, &record);
+    TAOS_UNUSED(tTombBlockGet(tombBlock, i, &record));
 
     if (i == 0) {
       tombBlk.minTbid.suid = record.suid;
@@ -1371,7 +1371,7 @@ int32_t tsdbFileWriteTombBlock(STsdbFD *fd, STombBlock *tombBlock, int8_t cmprAl
     }
   }
 
-  tsdbWriterUpdVerRange(range, tombBlk.minVer, tombBlk.maxVer);
+  (void)tsdbWriterUpdVerRange(range, tombBlk.minVer, tombBlk.maxVer);
 
   for (int32_t i = 0; i < ARRAY_SIZE(tombBlock->buffers); i++) {
     tBufferClear(buffer0);
@@ -1506,7 +1506,7 @@ static int32_t tsdbDataFileDoWriteTombRecord(SDataFileWriter *writer, const STom
   while (writer->ctx->hasOldTomb) {
     for (; writer->ctx->tombBlockIdx < TOMB_BLOCK_SIZE(writer->ctx->tombBlock); writer->ctx->tombBlockIdx++) {
       STombRecord record1[1];
-      tTombBlockGet(writer->ctx->tombBlock, writer->ctx->tombBlockIdx, record1);
+      TAOS_UNUSED(tTombBlockGet(writer->ctx->tombBlock, writer->ctx->tombBlockIdx, record1));
 
       int32_t c = tTombRecordCompare(record, record1);
       if (c < 0) {
@@ -1640,8 +1640,8 @@ static int32_t tsdbDataFileWriterCloseCommit(SDataFileWriter *writer, TFileOpArr
         .fid = writer->config->fid,
         .nf = writer->files[ftype],
     };
-    tsdbTFileUpdVerRange(&op.nf, ofRange);
-    tsdbTFileUpdVerRange(&op.nf, writer->ctx->range);
+    (void)tsdbTFileUpdVerRange(&op.nf, ofRange);
+    (void)tsdbTFileUpdVerRange(&op.nf, writer->ctx->range);
     TAOS_CHECK_GOTO(TARRAY2_APPEND(opArr, op), &lino, _exit);
 
     // .data
@@ -1652,7 +1652,7 @@ static int32_t tsdbDataFileWriterCloseCommit(SDataFileWriter *writer, TFileOpArr
           .fid = writer->config->fid,
           .nf = writer->files[ftype],
       };
-      tsdbTFileUpdVerRange(&op.nf, writer->ctx->range);
+      (void)tsdbTFileUpdVerRange(&op.nf, writer->ctx->range);
       TAOS_CHECK_GOTO(TARRAY2_APPEND(opArr, op), &lino, _exit);
     } else if (writer->config->files[ftype].file.size != writer->files[ftype].size) {
       op = (STFileOp){
@@ -1661,7 +1661,7 @@ static int32_t tsdbDataFileWriterCloseCommit(SDataFileWriter *writer, TFileOpArr
           .of = writer->config->files[ftype].file,
           .nf = writer->files[ftype],
       };
-      tsdbTFileUpdVerRange(&op.nf, writer->ctx->range);
+      (void)tsdbTFileUpdVerRange(&op.nf, writer->ctx->range);
       TAOS_CHECK_GOTO(TARRAY2_APPEND(opArr, op), &lino, _exit);
     }
 
@@ -1673,7 +1673,7 @@ static int32_t tsdbDataFileWriterCloseCommit(SDataFileWriter *writer, TFileOpArr
           .fid = writer->config->fid,
           .nf = writer->files[ftype],
       };
-      tsdbTFileUpdVerRange(&op.nf, writer->ctx->range);
+      (void)tsdbTFileUpdVerRange(&op.nf, writer->ctx->range);
       TAOS_CHECK_GOTO(TARRAY2_APPEND(opArr, op), &lino, _exit);
     } else if (writer->config->files[ftype].file.size != writer->files[ftype].size) {
       op = (STFileOp){
@@ -1682,7 +1682,7 @@ static int32_t tsdbDataFileWriterCloseCommit(SDataFileWriter *writer, TFileOpArr
           .of = writer->config->files[ftype].file,
           .nf = writer->files[ftype],
       };
-      tsdbTFileUpdVerRange(&op.nf, writer->ctx->range);
+      (void)tsdbTFileUpdVerRange(&op.nf, writer->ctx->range);
       TAOS_CHECK_GOTO(TARRAY2_APPEND(opArr, op), &lino, _exit);
     }
   }
@@ -1716,8 +1716,8 @@ static int32_t tsdbDataFileWriterCloseCommit(SDataFileWriter *writer, TFileOpArr
         .fid = writer->config->fid,
         .nf = writer->files[ftype],
     };
-    tsdbTFileUpdVerRange(&op.nf, ofRange);
-    tsdbTFileUpdVerRange(&op.nf, writer->ctx->tombRange);
+    (void)tsdbTFileUpdVerRange(&op.nf, ofRange);
+    (void)tsdbTFileUpdVerRange(&op.nf, writer->ctx->tombRange);
     TAOS_CHECK_GOTO(TARRAY2_APPEND(opArr, op), &lino, _exit);
   }
   int32_t encryptAlgorithm = writer->config->tsdb->pVnode->config.tsdbCfg.encryptAlgorithm;
@@ -1754,7 +1754,7 @@ static int32_t tsdbDataFileWriterOpenDataFD(SDataFileWriter *writer) {
     }
 
     int32_t lcn = writer->files[ftype].lcn;
-    tsdbTFileName(writer->config->tsdb, &writer->files[ftype], fname);
+    (void)tsdbTFileName(writer->config->tsdb, &writer->files[ftype], fname);
     TAOS_CHECK_GOTO(tsdbOpenFile(fname, writer->config->tsdb, flag, &writer->fd[ftype], lcn), &lino, _exit);
 
     if (writer->files[ftype].size == 0) {
@@ -1804,7 +1804,7 @@ int32_t tsdbDataFileWriterClose(SDataFileWriter **writer, bool abort, TFileOpArr
     } else {
       TAOS_CHECK_GOTO(tsdbDataFileWriterCloseCommit(writer[0], opArr), &lino, _exit);
     }
-    tsdbDataFileWriterDoClose(writer[0]);
+    (void)tsdbDataFileWriterDoClose(writer[0]);
   }
   taosMemoryFree(writer[0]);
   writer[0] = NULL;
@@ -1915,7 +1915,7 @@ static int32_t tsdbDataFileWriterOpenTombFD(SDataFileWriter *writer) {
   int32_t flag = (TD_FILE_READ | TD_FILE_WRITE | TD_FILE_CREATE | TD_FILE_TRUNC);
 
   int32_t lcn = writer->files[ftype].lcn;
-  tsdbTFileName(writer->config->tsdb, writer->files + ftype, fname);
+  (void)tsdbTFileName(writer->config->tsdb, writer->files + ftype, fname);
 
   TAOS_CHECK_GOTO(tsdbOpenFile(fname, writer->config->tsdb, flag, &writer->fd[ftype], lcn), &lino, _exit);
 

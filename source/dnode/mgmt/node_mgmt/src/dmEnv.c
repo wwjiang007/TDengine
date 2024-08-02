@@ -48,8 +48,8 @@ static int32_t dmCheckRepeatInit(SDnode *pDnode) {
 }
 
 static int32_t dmInitSystem() {
-  taosIgnSIGPIPE();
-  taosBlockSIGPIPE();
+  (void)taosIgnSIGPIPE();
+  (void)taosBlockSIGPIPE();
   taosResolveCRC();
   if (taosVersionStrToInt(version, &tsVersionCompatible) != 0) {
     return -1;
@@ -204,10 +204,10 @@ void dmCleanup() {
   auditCleanup();
   syncCleanUp();
   walCleanUp();
-  udfcClose();
+  (void)udfcClose();
   udfStopUdfd();
   taosStopCacheRefreshWorker();
-  dmDiskClose();
+  (void)dmDiskClose();
   DestroyRegexCache();
 
 #if defined(USE_S3)
@@ -264,7 +264,7 @@ static int32_t dmProcessCreateNodeReq(EDndNodeType ntype, SRpcMsg *pMsg) {
     return code;
   }
 
-  taosThreadMutexLock(&pDnode->mutex);
+  (void)taosThreadMutexLock(&pDnode->mutex);
   SMgmtInputOpt input = dmBuildMgmtInputOpt(pWrapper);
 
   dInfo("node:%s, start to create", pWrapper->name);
@@ -281,7 +281,7 @@ static int32_t dmProcessCreateNodeReq(EDndNodeType ntype, SRpcMsg *pMsg) {
     pWrapper->required = true;
   }
 
-  taosThreadMutexUnlock(&pDnode->mutex);
+  (void)taosThreadMutexUnlock(&pDnode->mutex);
   return code;
 }
 
@@ -320,7 +320,7 @@ static int32_t dmProcessAlterNodeTypeReq(EDndNodeType ntype, SRpcMsg *pMsg) {
 
   dInfo("node:%s, catched up leader, continue to process alter-node-type-request", pWrapper->name);
 
-  taosThreadMutexLock(&pDnode->mutex);
+  (void)taosThreadMutexLock(&pDnode->mutex);
 
   dInfo("node:%s, stopping node", pWrapper->name);
   dmStopNode(pWrapper);
@@ -329,7 +329,7 @@ static int32_t dmProcessAlterNodeTypeReq(EDndNodeType ntype, SRpcMsg *pMsg) {
 
   pWrapper = &pDnode->wrappers[ntype];
   if (taosMkDir(pWrapper->path) != 0) {
-    taosThreadMutexUnlock(&pDnode->mutex);
+    (void)taosThreadMutexUnlock(&pDnode->mutex);
     code = terrno;
     dError("failed to create dir:%s since %s", pWrapper->path, tstrerror(code));
     return code;
@@ -351,7 +351,7 @@ static int32_t dmProcessAlterNodeTypeReq(EDndNodeType ntype, SRpcMsg *pMsg) {
     pWrapper->required = true;
   }
 
-  taosThreadMutexUnlock(&pDnode->mutex);
+  (void)taosThreadMutexUnlock(&pDnode->mutex);
   return code;
 }
 
@@ -379,7 +379,7 @@ static int32_t dmProcessDropNodeReq(EDndNodeType ntype, SRpcMsg *pMsg) {
     return terrno = code;
   }
 
-  taosThreadMutexLock(&pDnode->mutex);
+  (void)taosThreadMutexLock(&pDnode->mutex);
   SMgmtInputOpt input = dmBuildMgmtInputOpt(pWrapper);
 
   dInfo("node:%s, start to drop", pWrapper->name);
@@ -399,7 +399,7 @@ static int32_t dmProcessDropNodeReq(EDndNodeType ntype, SRpcMsg *pMsg) {
     dmCloseNode(pWrapper);
     taosRemoveDir(pWrapper->path);
   }
-  taosThreadMutexUnlock(&pDnode->mutex);
+  (void)taosThreadMutexUnlock(&pDnode->mutex);
   return code;
 }
 
