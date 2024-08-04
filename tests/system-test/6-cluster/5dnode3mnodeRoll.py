@@ -27,7 +27,7 @@ import threading
 import time
 import json
 
-BASEVERSION = "3.1.1.0"
+BASEVERSION = "3.1.2.0"
 
 class TDTestCase:
 
@@ -88,7 +88,7 @@ class TDTestCase:
 
         return cfgPath
 
-    def installTaosd(self,bPath,cPath):
+    def installTaosd(self, bPath, cPath, package_type="community"):
         # os.system(f"rmtaos && mkdir -p {self.getBuildPath()}/build/lib/temp &&  mv {self.getBuildPath()}/build/lib/libtaos.so*  {self.getBuildPath()}/build/lib/temp/ ")
         # os.system(f" mv {bPath}/build  {bPath}/build_bak ")
         # os.system(f"mv {self.getBuildPath()}/build/lib/libtaos.so  {self.getBuildPath()}/build/lib/libtaos.so_bak ")
@@ -96,6 +96,15 @@ class TDTestCase:
         
         packagePath = "/usr/local/src/"
         dataPath = cPath + "/../data/"
+        packageType = "server"
+        if package_type == "community" :
+            packageType = "server"
+        elif package_type == "enterprise":
+            packageType = "enterprise"
+        if platform.system() == "Linux" and platform.machine() == "aarch64":
+            packageName = "TDengine-"+ packageType + "-" + BASEVERSION + "-Linux-arm64.tar.gz"
+        else:
+            packageName = "TDengine-"+ packageType + "-" + BASEVERSION + "-Linux-x64.tar.gz"
         packageName = "TDengine-server-"+  BASEVERSION + "-Linux-x64.tar.gz"
         packageTPath = packageName.split("-Linux-")[0]
         my_file = Path(f"{packagePath}/{packageName}")
@@ -201,7 +210,9 @@ class TDTestCase:
         tdDnodes=cluster.dnodes
         for i in range(dnodeNumbers):
             tdDnodes[i].stoptaosd()
-        self.installTaosd(bPath,cPath)
+        package_type = "enterprise"
+        # package_type = "community"
+        self.installTaosd(bPath,cPath,package_type)
         for i in range(dnodeNumbers):
             dnode_cfgPath = tdDnodes[i].cfgDir     
             dnode_dataPath = tdDnodes[i].dataDir
@@ -223,7 +234,7 @@ class TDTestCase:
         tdLog.info("====step1.3: insert data, includes time data, tmq and stream ====")
         tableNumbers1=100
         recordNumbers1=100000
-        recordNumbers2=1000
+        recordNumbers2=10000
 
         dbname = "dbtest"
         stb = f"{dbname}.meters"
@@ -236,14 +247,15 @@ class TDTestCase:
         print("LD_LIBRARY_PATH=/usr/lib taosBenchmark -f 6-cluster/rollup_db.json -y ")
         os.system("LD_LIBRARY_PATH=/usr/lib taosBenchmark -f 6-cluster/rollup_db.json -y")             
         # insert data 
-        tdLog.info(f" LD_LIBRARY_PATH=/usr/lib  taosBenchmark -d test -t {tableNumbers1} -c {cPath} -n {recordNumbers2} -v 2 -a 3 -y -k 10 -z 5 ")
-        os.system(f"LD_LIBRARY_PATH=/usr/lib taosBenchmark -d test -t {tableNumbers1} -c {cPath} -n {recordNumbers2} -v 2 -a 3 -y -k 10 -z 5 ")
+        # tdLog.info(f" LD_LIBRARY_PATH=/usr/lib  taosBenchmark -d test -t {tableNumbers1} -c {cPath} -n {recordNumbers2} -v 2 -a 3 -y -k 10 -z 5 ")
+        os.system(f"LD_LIBRARY_PATH=/usr/lib taosBenchmark -d test -t {tableNumbers1} -c {cPath} -n {recordNumbers2} -v 2 -a 3 -y -k 10 -z 5  ")
         
         # os.system(f"LD_LIBRARY_PATH=/usr/lib taos -s 'use test;create stream current_stream into current_stream_output_stb as select _wstart as `start`, _wend as wend, max(current) as max_current from meters where voltage <= 220 interval (5s);' ")
         # os.system(f'LD_LIBRARY_PATH=/usr/lib taos -s  "use test;create stream power_stream into power_stream_output_stb as select ts, concat_ws(\\".\\", location, tbname) as meter_location, current*voltage*cos(phase) as active_power, current*voltage*sin(phase) as reactive_power from meters partition by tbname;" ')
         # os.system(f'LD_LIBRARY_PATH=/usr/lib taos -s  "use test;show streams;" ')
         os.system(f'LD_LIBRARY_PATH=/usr/lib taos -s  "alter database test WAL_RETENTION_PERIOD 1000" ')
         os.system(f'LD_LIBRARY_PATH=/usr/lib taos -s  "create topic if not exists tmq_test_topic  as select  current,voltage,phase from test.meters where voltage <= 106 and current <= 5;" ')
+        os.system(f'LD_LIBRARY_PATH=/usr/lib taos -s  "create topic if not exists select_d1  as select * from test171.meters;" ')
         os.system(f'LD_LIBRARY_PATH=/usr/lib taos -s  "use test;show topics;" ')
         
         print(f"sed -i 's/\"cfgdir\".*/\"cfgdir\": \"{cPath_temp}\",/' 0-others/compa4096.json ")
@@ -347,9 +359,9 @@ class TDTestCase:
         tdsql1.checkRows(1)
 
         
-        # #check mnode status
-        # tdLog.info("check mnode status")
-        # clusterComCheck.checkMnodeStatus(mnodeNums)
+        #check mnode status
+        tdLog.info("check mnode status")
+        clusterComCheck.checkMnodeStatus(mnodeNums)
 
 
     def run(self):
