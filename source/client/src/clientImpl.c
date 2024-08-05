@@ -68,6 +68,10 @@ bool chkRequestKilled(void* param) {
   return killed;
 }
 
+void cleanupAppInfo() {
+  taosHashCleanup(appInfo.pInstMap);
+}
+
 static int32_t taosConnectImpl(const char* user, const char* auth, const char* db, __taos_async_fn_t fp, void* param,
                                SAppInstInfo* pAppInfo, int connType, STscObj** pTscObj);
 
@@ -332,7 +336,6 @@ int32_t execDdlQuery(SRequestObj* pRequest, SQuery* pQuery) {
 
   int64_t transporterId = 0;
   TSC_ERR_RET(asyncSendMsgToServer(pTscObj->pAppInfo->pTransporter, &pMsgInfo->epSet, &transporterId, pSendMsg));
-
   (void)tsem_wait(&pRequest->body.rspSem);
   return TSDB_CODE_SUCCESS;
 }
@@ -1017,15 +1020,13 @@ void returnToUser(SRequestObj* pRequest) {
 }
 
 static int32_t createResultBlock(TAOS_RES* pRes, int32_t numOfRows, SSDataBlock**pBlock) {
-  int64_t lastTs = 0;
-
-  int32_t     code = TSDB_CODE_SUCCESS;
+  int64_t     lastTs = 0;
   TAOS_FIELD* pResFields = taos_fetch_fields(pRes);
-  int32_t numOfFields = taos_num_fields(pRes);
+  int32_t     numOfFields = taos_num_fields(pRes);
 
-  *pBlock = createDataBlock();
-  if (NULL == *pBlock) {
-    return terrno;
+  int32_t code = createDataBlock(pBlock);
+  if (code) {
+    return code;
   }
 
   for(int32_t i = 0; i < numOfFields; ++i) {
@@ -1085,7 +1086,7 @@ void postSubQueryFetchCb(void* param, TAOS_RES* res, int32_t rowNum) {
   SRequestObj* pNextReq = acquireRequest(pRequest->relation.nextRefId);
   if (pNextReq) {
     continuePostSubQuery(pNextReq, pBlock);
-    releaseRequest(pRequest->relation.nextRefId);
+    (void)releaseRequest(pRequest->relation.nextRefId);
   } else {
     tscError("0x%" PRIx64 ", next req ref 0x%" PRIx64 " is not there, reqId:0x%" PRIx64, pRequest->self,
              pRequest->relation.nextRefId, pRequest->requestId);
@@ -2547,7 +2548,7 @@ int32_t appendTbToReq(SHashObj* pHash, int32_t pos1, int32_t len1, int32_t pos2,
   }
 
   char dbFName[TSDB_DB_FNAME_LEN];
-  sprintf(dbFName, "%d.%.*s", acctId, dbLen, dbName);
+  (void)sprintf(dbFName, "%d.%.*s", acctId, dbLen, dbName);
 
   STablesReq* pDb = taosHashGet(pHash, dbFName, strlen(dbFName));
   if (pDb) {
@@ -2923,8 +2924,10 @@ void taosAsyncFetchImpl(SRequestObj* pRequest, __taos_async_fn_t fp, void* param
       .cbParam = pRequest,
   };
 
-  if (TSDB_CODE_SUCCESS != schedulerFetchRows(pRequest->body.queryJob, &req)) {
-    tscError("0x%" PRIx64 " failed to schedule fetch rows", pRequest->self);
+  int32_t code = schedulerFetchRows(pRequest->body.queryJob, &req);
+  if (TSDB_CODE_SUCCESS != code) {
+    tscError("0x%" PRIx64 " failed to schedule fetch rows", pRequest->requestId);
+    pRequest->body.fetchFp(param, pRequest, code);    
   }
 }
 

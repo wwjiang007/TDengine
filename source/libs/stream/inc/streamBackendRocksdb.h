@@ -81,6 +81,7 @@ typedef struct {
   int64_t        dataWritten;
 
   void* pMeta;
+  int8_t removeAllFiles;
 
 } STaskDbWrapper;
 
@@ -143,14 +144,16 @@ SListNode* streamBackendAddCompare(void* backend, void* arg);
 void       streamBackendDelCompare(void* backend, void* arg);
 int32_t    streamStateCvtDataFormat(char* path, char* key, void* cfInst);
 
-STaskDbWrapper* taskDbOpen(const char* path, const char* key, int64_t chkptId, int64_t* processVer);
-void            taskDbDestroy(void* pBackend, bool flush);
-void            taskDbDestroy2(void* pBackend);
+int32_t taskDbOpen(const char* path, const char* key, int64_t chkptId, int64_t* processVer, STaskDbWrapper** ppTaskDb);
+void    taskDbDestroy(void* pBackend, bool flush);
+void    taskDbDestroy2(void* pBackend);
 
 void taskDbUpdateChkpId(void* pTaskDb, int64_t chkpId);
 
 void* taskDbAddRef(void* pTaskDb);
 void  taskDbRemoveRef(void* pTaskDb);
+
+void taskDbSetClearFileFlag(void* pTaskDb); 
 
 int  streamStateOpenBackend(void* backend, SStreamState* pState);
 void streamStateCloseBackend(SStreamState* pState, bool remove);
@@ -252,7 +255,7 @@ int32_t taskDbDestroySnap(void* arg, SArray* pSnapInfo);
 
 int32_t taskDbDoCheckpoint(void* arg, int64_t chkpId, int64_t processId);
 
-SBkdMgt* bkdMgtCreate(char* path);
+int32_t bkdMgtCreate(char* path, SBkdMgt **bm);
 int32_t  bkdMgtAddChkp(SBkdMgt* bm, char* task, char* path);
 int32_t  bkdMgtGetDelta(SBkdMgt* bm, char* taskId, int64_t chkpId, SArray* list, char* name);
 int32_t  bkdMgtDumpTo(SBkdMgt* bm, char* taskId, char* dname);

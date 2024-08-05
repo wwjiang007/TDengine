@@ -215,7 +215,7 @@ static int32_t tsdbMergeFileSetBeginOpenReader(SMerger *merger) {
         TAOS_CHECK_GOTO(tsdbSttFileReaderOpen(fobj->fname, &config, &reader), &lino, _exit);
 
         if ((code = TARRAY2_APPEND(merger->sttReaderArr, reader))) {
-          tsdbSttFileReaderClose(&reader);
+          (void)tsdbSttFileReaderClose(&reader);
           TSDB_CHECK_CODE(code, lino, _exit);
         }
       }
@@ -230,7 +230,7 @@ _exit:
   if (code) {
     tsdbError("vgId:%d %s failed at %s:%d since %s", TD_VID(merger->tsdb->pVnode), __func__, __FILE__, lino,
               tstrerror(code));
-    tsdbMergeFileSetEndCloseReader(merger);
+    (void)tsdbMergeFileSetEndCloseReader(merger);
   }
   return code;
 }
@@ -282,7 +282,7 @@ static int32_t tsdbMergeFileSetBeginOpenWriter(SMerger *merger) {
 
   TAOS_CHECK_GOTO(tfsAllocDisk(merger->tsdb->pVnode->pTfs, level, &did), &lino, _exit);
 
-  tfsMkdirRecurAt(merger->tsdb->pVnode->pTfs, merger->tsdb->path, did);
+  (void)tfsMkdirRecurAt(merger->tsdb->pVnode->pTfs, merger->tsdb->path, did);
   SFSetWriterConfig config = {
       .tsdb = merger->tsdb,
       .toSttOnly = true,
@@ -355,9 +355,9 @@ static int32_t tsdbMergeFileSetEndCloseWriter(SMerger *merger) {
 }
 
 static int32_t tsdbMergeFileSetEndCloseIter(SMerger *merger) {
-  tsdbIterMergerClose(&merger->tombIterMerger);
+  (void)tsdbIterMergerClose(&merger->tombIterMerger);
   TARRAY2_CLEAR(merger->tombIterArr, tsdbIterClose);
-  tsdbIterMergerClose(&merger->dataIterMerger);
+  (void)tsdbIterMergerClose(&merger->dataIterMerger);
   TARRAY2_CLEAR(merger->dataIterArr, tsdbIterClose);
   return 0;
 }
@@ -375,13 +375,13 @@ static int32_t tsdbMergeFileSetEnd(SMerger *merger) {
   // edit file system
   TAOS_CHECK_GOTO(tsdbFSEditBegin(merger->tsdb->pFS, merger->fopArr, TSDB_FEDIT_MERGE), &lino, _exit);
 
-  taosThreadMutexLock(&merger->tsdb->mutex);
+  (void)taosThreadMutexLock(&merger->tsdb->mutex);
   code = tsdbFSEditCommit(merger->tsdb->pFS);
   if (code) {
-    taosThreadMutexUnlock(&merger->tsdb->mutex);
+    (void)taosThreadMutexUnlock(&merger->tsdb->mutex);
     TSDB_CHECK_CODE(code, lino, _exit);
   }
-  taosThreadMutexUnlock(&merger->tsdb->mutex);
+  (void)taosThreadMutexUnlock(&merger->tsdb->mutex);
 
 _exit:
   if (code) {
@@ -478,10 +478,10 @@ _exit:
 static int32_t tsdbMergeGetFSet(SMerger *merger) {
   STFileSet *fset;
 
-  taosThreadMutexLock(&merger->tsdb->mutex);
-  tsdbFSGetFSet(merger->tsdb->pFS, merger->fid, &fset);
+  (void)taosThreadMutexLock(&merger->tsdb->mutex);
+  (void)tsdbFSGetFSet(merger->tsdb->pFS, merger->fid, &fset);
   if (fset == NULL) {
-    taosThreadMutexUnlock(&merger->tsdb->mutex);
+    (void)taosThreadMutexUnlock(&merger->tsdb->mutex);
     return 0;
   }
 
@@ -489,10 +489,10 @@ static int32_t tsdbMergeGetFSet(SMerger *merger) {
 
   int32_t code = tsdbTFileSetInitCopy(merger->tsdb, fset, &merger->fset);
   if (code) {
-    taosThreadMutexUnlock(&merger->tsdb->mutex);
+    (void)taosThreadMutexUnlock(&merger->tsdb->mutex);
     return code;
   }
-  taosThreadMutexUnlock(&merger->tsdb->mutex);
+  (void)taosThreadMutexUnlock(&merger->tsdb->mutex);
   return 0;
 }
 

@@ -928,8 +928,9 @@ SExecTaskInfo* createDummyTaskInfo(char* taskId) {
 }
 
 SSDataBlock* createDummyBlock(int32_t blkId) {
-  SSDataBlock* p = createDataBlock();
-  assert(p);
+  SSDataBlock* p = NULL;
+  int32_t code = createDataBlock(&p);
+  assert(code == 0);
 
   p->info.id.blockId = blkId;
   p->info.type = STREAM_INVALID;
@@ -2853,7 +2854,7 @@ void resetForJoinRerun(int32_t dsNum, SSortMergeJoinPhysiNode* pNode, SExecTaskI
   SOperatorInfo* pDownstreams[2];
   createDummyDownstreamOperators(2, pDownstreams);  
   SOperatorInfo* ppDownstreams[] = {pDownstreams[0], pDownstreams[1]};
-  jtCtx.pJoinOp = createMergeJoinOperatorInfo(ppDownstreams, 2, pNode, pTask);
+  int32_t code = createMergeJoinOperatorInfo(ppDownstreams, 2, pNode, pTask, &jtCtx.pJoinOp);
   ASSERT_TRUE(NULL != jtCtx.pJoinOp);
 }
 

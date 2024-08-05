@@ -534,7 +534,7 @@ void    tFreeStreamTask(SStreamTask* pTask);
 int32_t tEncodeStreamTask(SEncoder* pEncoder, const SStreamTask* pTask);
 int32_t tDecodeStreamTask(SDecoder* pDecoder, SStreamTask* pTask);
 int32_t streamTaskInit(SStreamTask* pTask, SStreamMeta* pMeta, SMsgCb* pMsgCb, int64_t ver);
-void    streamFreeTaskState(SStreamTask* pTask, ETaskStatus status);
+void    streamFreeTaskState(SStreamTask* pTask, int8_t remove);
 
 int32_t tDecodeStreamTaskChkInfo(SDecoder* pDecoder, SCheckpointInfo* pChkpInfo);
 int32_t tDecodeStreamTaskId(SDecoder* pDecoder, STaskId* pTaskId);
@@ -641,12 +641,13 @@ bool streamTaskShouldPause(const SStreamTask* pStatus);
 bool streamTaskIsIdle(const SStreamTask* pTask);
 bool streamTaskReadyToRun(const SStreamTask* pTask, char** pStatus);
 
-int32_t           createStreamTaskIdStr(int64_t streamId, int32_t taskId, const char** pId);
-SStreamTaskState  streamTaskGetStatus(const SStreamTask* pTask);
-const char*       streamTaskGetStatusStr(ETaskStatus status);
-void              streamTaskResetStatus(SStreamTask* pTask);
-void              streamTaskSetStatusReady(SStreamTask* pTask);
-ETaskStatus       streamTaskGetPrevStatus(const SStreamTask* pTask);
+int32_t          createStreamTaskIdStr(int64_t streamId, int32_t taskId, const char** pId);
+SStreamTaskState streamTaskGetStatus(const SStreamTask* pTask);
+const char*      streamTaskGetStatusStr(ETaskStatus status);
+void             streamTaskResetStatus(SStreamTask* pTask);
+void             streamTaskSetStatusReady(SStreamTask* pTask);
+ETaskStatus      streamTaskGetPrevStatus(const SStreamTask* pTask);
+const char*      streamTaskGetExecType(int32_t type);
 
 bool streamTaskUpdateEpsetInfo(SStreamTask* pTask, SArray* pNodeList);
 void streamTaskResetUpstreamStageInfo(SStreamTask* pTask);
@@ -682,13 +683,13 @@ void    streamTaskCleanupCheckInfo(STaskCheckInfo* pInfo);
 // fill-history task
 int32_t streamLaunchFillHistoryTask(SStreamTask* pTask);
 int32_t streamStartScanHistoryAsync(SStreamTask* pTask, int8_t igUntreated);
-int32_t streamExecScanHistoryInFuture(SStreamTask* pTask, int32_t idleDuration);
+void    streamExecScanHistoryInFuture(SStreamTask* pTask, int32_t idleDuration);
 bool    streamHistoryTaskSetVerRangeStep2(SStreamTask* pTask, int64_t latestVer);
 
 // checkpoint related
 void    streamTaskGetActiveCheckpointInfo(const SStreamTask* pTask, int32_t* pTransId, int64_t* pCheckpointId);
 int32_t streamTaskSetActiveCheckpointInfo(SStreamTask* pTask, int64_t activeCheckpointId);
-int32_t streamTaskSetFailedChkptInfo(SStreamTask* pTask, int32_t transId, int64_t checkpointId);
+void    streamTaskSetFailedChkptInfo(SStreamTask* pTask, int32_t transId, int64_t checkpointId);
 bool    streamTaskAlreadySendTrigger(SStreamTask* pTask, int32_t downstreamNodeId);
 void    streamTaskGetTriggerRecvStatus(SStreamTask* pTask, int32_t* pRecved, int32_t* pTotal);
 void    streamTaskInitTriggerDispatchInfo(SStreamTask* pTask);

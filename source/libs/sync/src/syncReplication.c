@@ -48,19 +48,19 @@
 
 int32_t syncNodeReplicateReset(SSyncNode* pNode, SRaftId* pDestId) {
   SSyncLogBuffer* pBuf = pNode->pLogBuf;
-  taosThreadMutexLock(&pBuf->mutex);
+  (void)taosThreadMutexLock(&pBuf->mutex);
   SSyncLogReplMgr* pMgr = syncNodeGetLogReplMgr(pNode, pDestId);
   syncLogReplReset(pMgr);
-  taosThreadMutexUnlock(&pBuf->mutex);
+  (void)taosThreadMutexUnlock(&pBuf->mutex);
 
   TAOS_RETURN(TSDB_CODE_SUCCESS);
 }
 
 int32_t syncNodeReplicate(SSyncNode* pNode) {
   SSyncLogBuffer* pBuf = pNode->pLogBuf;
-  taosThreadMutexLock(&pBuf->mutex);
+  (void)taosThreadMutexLock(&pBuf->mutex);
   int32_t ret = syncNodeReplicateWithoutLock(pNode);
-  taosThreadMutexUnlock(&pBuf->mutex);
+  (void)taosThreadMutexUnlock(&pBuf->mutex);
 
   TAOS_RETURN(ret);
 }
@@ -84,7 +84,7 @@ int32_t syncNodeReplicateWithoutLock(SSyncNode* pNode) {
 int32_t syncNodeSendAppendEntries(SSyncNode* pSyncNode, const SRaftId* destRaftId, SRpcMsg* pRpcMsg) {
   SyncAppendEntries* pMsg = pRpcMsg->pCont;
   pMsg->destId = *destRaftId;
-  syncNodeSendMsgById(destRaftId, pSyncNode, pRpcMsg);
+  (void)syncNodeSendMsgById(destRaftId, pSyncNode, pRpcMsg);
 
   TAOS_RETURN(TSDB_CODE_SUCCESS);
 }
@@ -113,7 +113,7 @@ int32_t syncNodeHeartbeatPeers(SSyncNode* pSyncNode) {
 
     // send msg
     syncLogSendHeartbeat(pSyncNode, pSyncMsg, true, 0, 0);
-    syncNodeSendHeartbeat(pSyncNode, &pSyncMsg->destId, &rpcMsg);
+    (void)syncNodeSendHeartbeat(pSyncNode, &pSyncMsg->destId, &rpcMsg);
   }
 
   TAOS_RETURN(TSDB_CODE_SUCCESS);
