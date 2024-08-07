@@ -819,10 +819,21 @@ void* streamBackendInit(const char* streamPath, int64_t chkpId, int32_t vgId) {
 
   uint32_t         dbMemLimit = nextPow2(tsMaxStreamBackendCache) << 20;
   SBackendWrapper* pHandle = taosMemoryCalloc(1, sizeof(SBackendWrapper));
+  if (pHandle == NULL) {
+    goto _EXIT;
+  }
+
   pHandle->list = tdListNew(sizeof(SCfComparator));
+  if (pHandle->list == NULL) {
+    goto _EXIT;
+  }
+
   (void)taosThreadMutexInit(&pHandle->mutex, NULL);
   (void)taosThreadMutexInit(&pHandle->cfMutex, NULL);
   pHandle->cfInst = taosHashInit(64, taosGetDefaultHashFunction(TSDB_DATA_TYPE_BINARY), false, HASH_NO_LOCK);
+  if (pHandle->cfInst == NULL) {
+    goto _EXIT;
+  }
 
   rocksdb_env_t* env = rocksdb_create_default_env();  // rocksdb_envoptions_create();
 
@@ -910,6 +921,7 @@ void streamBackendCleanup(void* arg) {
 
   if (pHandle->db) {
     rocksdb_close(pHandle->db);
+    pHandle->db = NULL;
   }
   rocksdb_options_destroy(pHandle->dbOpt);
   rocksdb_env_destroy(pHandle->env);
@@ -1132,6 +1144,8 @@ int32_t chkpMayDelObsolete(void* arg, int64_t chkpId, char* path) {
     int64_t id = *(int64_t*)taosArrayGet(chkpDel, i);
     char    tbuf[256] = {0};
     sprintf(tbuf, "%s%scheckpoint%" PRId64 "", path, TD_DIRSEP, id);
+
+    stInfo("backend remove obsolete checkpoint: %s", tbuf);
     if (taosIsDir(tbuf)) {
       taosRemoveDir(tbuf);
     }
@@ -2508,6 +2522,7 @@ STaskDbWrapper* taskDbOpenImpl(const char* key, char* statePath, char* dbPath) {
     }
 
     rocksdb_close(pTaskDb->db);
+    pTaskDb->db = NULL;
 
     if (cfNames != NULL) {
       rocksdb_list_column_families_destroy(cfNames, nCf);
@@ -2617,6 +2632,7 @@ void taskDbDestroy(void* pDb, bool flush) {
 
   if (wrapper->db) {
     rocksdb_close(wrapper->db);
+    wrapper->db = NULL;
   }
 
   rocksdb_options_destroy(wrapper->dbOpt);
@@ -2647,6 +2663,7 @@ void taskDbDestroy(void* pDb, bool flush) {
 
   if (wrapper->removeAllFiles) {
     char* err = NULL;
+    stInfo("drop task remove backend dat:%s", wrapper->path);
     taosRemoveDir(wrapper->path);
   }
   taosMemoryFree(wrapper->path);
