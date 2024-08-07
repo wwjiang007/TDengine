@@ -688,6 +688,7 @@ static void transHttpEnvInit() {
 
 void transHttpEnvDestroy() {
   // remove default chanId
+  if (httpDefaultChanId == -1) return;
   taosDestroyHttpChan(httpDefaultChanId);
   httpDefaultChanId = -1;
 }
@@ -734,11 +735,15 @@ int64_t transInitHttpChanImpl() {
 
   int64_t ref = taosAddRef(httpRefMgt, http);
   if (ref < 0) {
+    code = (int32_t)ref;
     goto _ERROR;
   }
   return ref;
 
 _ERROR:
+  if(code != 0) {
+    tError("http-report failed to init http, reason:%s", tstrerror(code));
+  }
   httpModuleDestroy2(http);
   return code;
 }

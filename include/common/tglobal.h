@@ -41,6 +41,11 @@ typedef enum {
   DND_CS_MNODE_WAL = 8,
 } EEncryptScope;
 
+typedef enum {
+  LOG_MODE_DUMP_TO_TERM = 1,  // 1st bit: dump log to file or terminal
+                              // 2nd bit: ...
+} ELogMode;
+
 // cluster
 extern char     tsFirst[];
 extern char     tsSecond[];
@@ -59,7 +64,6 @@ extern EEncryptScope  tsiEncryptScope;
 extern char     tsEncryptKey[];
 
 // common
-extern bool    tsDump;
 extern int32_t tsMaxShellConns;
 extern int32_t tsShellActivityTimer;
 extern int32_t tsCompressMsgSize;
@@ -89,6 +93,9 @@ extern int32_t tsNumOfSnodeStreamThreads;
 extern int32_t tsNumOfSnodeWriteThreads;
 extern int64_t tsRpcQueueMemoryAllowed;
 extern int32_t tsRetentionSpeedLimitMB;
+
+// log
+extern ELogMode tsLogMode;
 
 // sync raft
 extern int32_t tsElectInterval;

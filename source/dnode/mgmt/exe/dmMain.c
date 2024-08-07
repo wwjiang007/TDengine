@@ -51,6 +51,7 @@
 #define DM_EMAIL         "<support@taosdata.com>"
 #define DM_MEM_DBG       "Enable memory debug"
 #define DM_SET_ENCRYPTKEY  "Set encrypt key. such as: -y 1234567890abcdef, the length should be less or equal to 16."
+#define DM_CHECK_S3      "Check S3 configuration."
 
 // clang-format on
 static struct {
@@ -239,7 +240,7 @@ static int32_t dmParseArgs(int32_t argc, char const *argv[]) {
     }
   }
 
-  tsDump = global.dumpConfig || global.dumpSdb || global.checkS3;
+  if (global.dumpConfig || global.dumpSdb || global.checkS3) tsLogMode &= LOG_MODE_DUMP_TO_TERM;
 
   return 0;
 }

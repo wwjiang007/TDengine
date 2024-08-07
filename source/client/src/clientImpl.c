@@ -2502,6 +2502,8 @@ TSDB_SERVER_STATUS taos_check_server_status(const char* fqdn, int port, char* de
     tstrncpy(details, statusRsp.details, maxlen);
   }
 
+  tscInfo("%s: server status code:%d, details:%s", __func__, code, statusRsp.details);
+
 _OVER:
   if (clientRpc != NULL) {
     rpcClose(clientRpc);

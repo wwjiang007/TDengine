@@ -461,7 +461,7 @@ int32_t shellParseArgs(int32_t argc, char *argv[]) {
   }
 #endif
 
-  tsDump = shell.args.is_dump_config || shell.args.is_check || shell.args.is_startup;
+  if (shell.args.is_dump_config) tsLogMode &= LOG_MODE_DUMP_TO_TERM;
 
   return shellCheckArgs();
 }

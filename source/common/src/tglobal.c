@@ -50,7 +50,6 @@ EEncryptScope tsiEncryptScope = 0;
 char tsEncryptKey[17] = {0};
 
 // common
-bool    tsDump = false;  // dump commands do not output logs to file
 int32_t tsMaxShellConns = 50000;
 int32_t tsShellActivityTimer = 3;  // second
 
@@ -76,6 +75,9 @@ int32_t tsNumOfSnodeWriteThreads = 1;
 int32_t tsMaxStreamBackendCache = 128;  // M
 int32_t tsPQSortMemThreshold = 16;      // M
 int32_t tsRetentionSpeedLimitMB = 0;    // unlimited
+
+// log
+ELogMode tsLogMode = 0;
 
 // sync raft
 int32_t tsElectInterval = 25 * 1000;
@@ -1585,7 +1587,7 @@ int32_t taosCreateLog(const char *logname, int32_t logFileNum, const char *cfgDi
     tsLogEmbedded = 0;
     TAOS_CHECK_GOTO(taosAddClientLogCfg(pCfg), &lino, _exit);
   } else {
-    if (!tsDump) tsLogEmbedded = 1;
+    tsLogEmbedded = 1;
     TAOS_CHECK_GOTO(taosAddClientLogCfg(pCfg), &lino, _exit);
     TAOS_CHECK_GOTO(taosAddServerLogCfg(pCfg), &lino, _exit);
   }
@@ -1616,7 +1618,7 @@ int32_t taosCreateLog(const char *logname, int32_t logFileNum, const char *cfgDi
     goto _exit;
   }
 
-  if ((code = taosInitLog(logname, logFileNum)) != 0) {
+  if (!(tsLogMode & LOG_MODE_DUMP_TO_TERM) && (code = taosInitLog(logname, logFileNum)) != 0) {
     printf("failed to init log file since %s\n", tstrerror(code));
     goto _exit;
   }
