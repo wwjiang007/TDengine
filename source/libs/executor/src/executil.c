@@ -1747,6 +1747,7 @@ int32_t createExprFromOneNode(SExprInfo* pExp, SNode* pNode, int16_t slotId) {
 
   pExp->pExpr->_function.num = 1;
   pExp->pExpr->_function.functionId = -1;
+  // qInfo("createExprFromOneNode slot[%d] type: %d", slotId, type);
 
   int32_t type = nodeType(pNode);
   // it is a project query, or group by column
@@ -1786,9 +1787,20 @@ int32_t createExprFromOneNode(SExprInfo* pExp, SNode* pNode, int16_t slotId) {
     pExp->pExpr->nodeType = QUERY_NODE_FUNCTION;
     SFunctionNode* pFuncNode = (SFunctionNode*)pNode;
 
-    SDataType* pType = &pFuncNode->node.resType;
+    // SDataType* pType = &pFuncNode->node.resType;
+    // pExp->base.resSchema =
+    //     createResSchema(pType->type, pType->bytes, slotId, pType->scale, pType->precision, pFuncNode->node.aliasName);
+
+    SDataType*  pType = &pFuncNode->node.resType;
+    const char* pName = pFuncNode->node.aliasName;
+    if (pFuncNode->funcType == FUNCTION_TYPE_FORECAST_CONFIDENCE_LOW ||
+        pFuncNode->funcType == FUNCTION_TYPE_FORECAST_CONFIDENCE_HIGH ||
+        pFuncNode->funcType == FUNCTION_TYPE_FORECAST_EXPR) {
+      pName = pFuncNode->functionName;
+    }
+    qInfo("createExprFromOneNode slot[%d] function: %s %s", slotId, pName, pFuncNode->functionName);
     pExp->base.resSchema =
-        createResSchema(pType->type, pType->bytes, slotId, pType->scale, pType->precision, pFuncNode->node.aliasName);
+        createResSchema(pType->type, pType->bytes, slotId, pType->scale, pType->precision, pName);
 
     tExprNode* pExprNode = pExp->pExpr;
 

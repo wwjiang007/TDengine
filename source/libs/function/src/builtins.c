@@ -2074,6 +2074,62 @@ static EFuncReturnRows diffEstReturnRows(SFunctionNode* pFunc) {
                                                                                  : FUNC_RETURN_ROWS_N_MINUS_1;
 }
 
+static int32_t translateForecast(SFunctionNode* pFunc, char* pErrBuf, int32_t len) {
+  int32_t numOfParams = LIST_LENGTH(pFunc->pParameterList);
+  if (numOfParams < 4) {
+    return invaildFuncParaNumErrMsg(pErrBuf, len, "forecast(method, parameter, ts, exprs ……)");
+  }
+
+  // 1st parameter is method
+  SNode* pMethodNode = nodesListGetNode(pFunc->pParameterList, 0);
+  if (pMethodNode->type != TSDB_DATA_TYPE_VARCHAR) {
+    return invaildFuncParaTypeErrMsg(pErrBuf, len, "forecast requires the 1st parameter to be method");
+  }
+
+  // do method check later
+  //
+
+  SNode* pParaNode = nodesListGetNode(pFunc->pParameterList, 1);
+  if (pParaNode->type != TSDB_DATA_TYPE_VARCHAR) {
+    return invaildFuncParaTypeErrMsg(pErrBuf, len, "forecast requires the 2nd parameter to be parameters");
+  }
+
+  // do parameters check later
+  //
+
+  // 3rd parameter should be timestamp.
+  uint8_t colType = getSDataTypeFromNode(nodesListGetNode(pFunc->pParameterList, 2))->type;
+  if (!IS_TIMESTAMP_TYPE(colType)) {
+    return invaildFuncParaTypeErrMsg(pErrBuf, len, "forecast requires the 3rd parameter to be timestamp");
+  }
+
+  // 4th parameter should be value.
+  for (int i = 3; i < numOfParams; i++) {
+    uint8_t valType = getSDataTypeFromNode(nodesListGetNode(pFunc->pParameterList, i))->type;
+    if (IS_TIMESTAMP_TYPE(valType) || IS_VAR_DATA_TYPE(valType)) {
+      return invaildFuncParaTypeErrMsg(pErrBuf, len,
+                                       "forecast requires the 4th and subsequent parameters to be numerical types");
+    }
+  }
+
+  pFunc->node.resType = ((SExprNode*)pParaNode)->resType;
+  // pFunc->node.resType = (SDataType){.bytes = tDataTypes[TSDB_DATA_TYPE_DOUBLE].bytes, .type = TSDB_DATA_TYPE_DOUBLE};
+
+  return TSDB_CODE_SUCCESS;
+}
+
+static int32_t translateForecastLevel(SFunctionNode* pFunc, char* pErrBuf, int32_t len) {
+  pFunc->node.resType = (SDataType){.bytes = tDataTypes[TSDB_DATA_TYPE_DOUBLE].bytes, .type = TSDB_DATA_TYPE_DOUBLE};
+  return TSDB_CODE_SUCCESS;
+}
+
+static int32_t translateForecastFull(SFunctionNode* pFunc, char* pErrBuf, int32_t len) {
+  uint8_t resultType = TSDB_DATA_TYPE_VARCHAR;
+  int32_t resultBytes = 256;
+  pFunc->node.resType = (SDataType){.bytes = resultBytes, .type = resultType};
+  return TSDB_CODE_SUCCESS;
+}
+
 static int32_t translateLength(SFunctionNode* pFunc, char* pErrBuf, int32_t len) {
   if (1 != LIST_LENGTH(pFunc->pParameterList)) {
     return invaildFuncParaNumErrMsg(pErrBuf, len, pFunc->functionName);
@@ -3560,6 +3616,48 @@ const SBuiltinFuncDefinition funcMgtBuiltins[] = {
     .finalizeFunc = functionFinalize,
     .estimateReturnRowsFunc = diffEstReturnRows,
     .processFuncByRow  = diffFunctionByRow,
+  },
+  {
+    .name = "forecast",
+    .type = FUNCTION_TYPE_FORECAST,
+    .classification = FUNC_MGT_AGG_FUNC | FUNC_MGT_SELECT_FUNC | FUNC_MGT_IMPLICIT_TS_FUNC | FUNC_MGT_MULTI_ROWS_FUNC | FUNC_MGT_KEEP_ORDER_FUNC | FUNC_MGT_FORBID_STREAM_FUNC |
+                      FUNC_MGT_FORBID_FILL_FUNC,
+    .translateFunc = translateForecast,
+    .getEnvFunc   = getForecastFuncEnv,
+    .initFunc     = forecastFunctionSetup,
+    .processFunc  = forecastFunction,
+    .sprocessFunc = forecastScalarFunction,
+    .finalizeFunc = forecastFinalize,
+  }, 
+  {
+    .name = "_flow",
+    .type = FUNCTION_TYPE_FORECAST_CONFIDENCE_LOW,
+    .classification = FUNC_MGT_PSEUDO_COLUMN_FUNC | FUNC_MGT_SCAN_PC_FUNC | FUNC_MGT_SKIP_SCAN_CHECK_FUNC | FUNC_MGT_KEEP_ORDER_FUNC,
+    .translateFunc = translateForecastLevel,
+    .getEnvFunc   = NULL,
+    .initFunc     = NULL,
+    .sprocessFunc = NULL,
+    .finalizeFunc = NULL
+  },
+  {
+    .name = "_fhigh",
+    .type = FUNCTION_TYPE_FORECAST_CONFIDENCE_HIGH,
+    .classification = FUNC_MGT_PSEUDO_COLUMN_FUNC | FUNC_MGT_SCAN_PC_FUNC | FUNC_MGT_SKIP_SCAN_CHECK_FUNC | FUNC_MGT_KEEP_ORDER_FUNC,
+    .translateFunc = translateForecastLevel,
+    .getEnvFunc   = NULL,
+    .initFunc     = NULL,
+    .sprocessFunc = NULL,
+    .finalizeFunc = NULL
+  },
+  {
+    .name = "_fexpr",
+    .type = FUNCTION_TYPE_FORECAST_EXPR,
+    .classification = FUNC_MGT_PSEUDO_COLUMN_FUNC | FUNC_MGT_SCAN_PC_FUNC | FUNC_MGT_SKIP_SCAN_CHECK_FUNC | FUNC_MGT_KEEP_ORDER_FUNC,
+    .translateFunc = translateForecastFull,
+    .getEnvFunc   = NULL,
+    .initFunc     = NULL,
+    .sprocessFunc = NULL,
+    .finalizeFunc = NULL
   },
   {
     .name = "statecount",

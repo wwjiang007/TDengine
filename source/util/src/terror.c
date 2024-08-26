@@ -725,6 +725,10 @@ TAOS_DEFINE_ERROR(TSDB_CODE_FUNC_INVALID_VALUE_RANGE,      "Function got invalid
 TAOS_DEFINE_ERROR(TSDB_CODE_FUNC_SETUP_ERROR,              "Function set up failed")
 TAOS_DEFINE_ERROR(TSDB_CODE_FUNC_INVALID_RES_LENGTH,       "Function result exceed max length")
 
+//forecast
+TAOS_DEFINE_ERROR(TSDB_CODE_FORECAST_API_NOT_FOUND,        "Forecast service not found")
+TAOS_DEFINE_ERROR(TSDB_CODE_FORECAST_API_NOT_ACTIVE,       "Forecast service not active")
+
 //udf
 TAOS_DEFINE_ERROR(TSDB_CODE_UDF_STOPPING,                   "udf is stopping")
 TAOS_DEFINE_ERROR(TSDB_CODE_UDF_PIPE_READ_ERR,              "udf pipe read error")

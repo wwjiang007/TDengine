@@ -651,6 +651,7 @@ void doUpdateNumOfRows(SqlFunctionCtx* pCtx, SResultRow* pRow, int32_t numOfExpr
 
 void copyResultrowToDataBlock(SExprInfo* pExprInfo, int32_t numOfExprs, SResultRow* pRow, SqlFunctionCtx* pCtx,
                               SSDataBlock* pBlock, const int32_t* rowEntryOffset, SExecTaskInfo* pTaskInfo) {
+  qInfo("copyResultrowToDataBlock, numOfExprs:%d", numOfExprs);
   int32_t code = TSDB_CODE_SUCCESS;
   int32_t lino = 0;
   for (int32_t j = 0; j < numOfExprs; ++j) {
