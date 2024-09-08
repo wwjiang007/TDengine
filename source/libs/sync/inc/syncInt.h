@@ -334,6 +334,11 @@ int32_t syncNodeDynamicQuorum(const SSyncNode* pSyncNode);
 bool    syncNodeIsMnode(SSyncNode* pSyncNode);
 int32_t syncNodePeerStateInit(SSyncNode* pSyncNode);
 
+// debug
+void syncEntryStatisPrint();
+void syncEntryStatisInc(SSyncRaftEntry* pEntry);
+void syncEntryStatisDec(SSyncRaftEntry* pEntry);
+
 #ifdef __cplusplus
 }
 #endif

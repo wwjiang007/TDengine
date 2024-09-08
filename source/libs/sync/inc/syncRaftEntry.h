@@ -24,10 +24,12 @@ extern "C" {
 #include "syncMessage.h"
 #include "tskiplist.h"
 
+
 typedef struct SSyncRaftEntry {
   uint32_t  bytes;
   uint32_t  msgType;          // TDMT_SYNC_CLIENT_REQUEST
   uint32_t  originalRpcType;  // origin RpcMsg msgType
+  int8_t    from;
   uint64_t  seqNum;
   bool      isWeak;
   SyncTerm  term;

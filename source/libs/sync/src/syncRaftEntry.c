@@ -18,6 +18,44 @@
 #include "syncUtil.h"
 #include "tref.h"
 
+typedef struct {
+  int64_t msgNum[TDMT_MAX_MSG_NUM_MIN];
+  int64_t msgSize[TDMT_MAX_MSG_NUM_MIN];
+} SSyncEntryStatis;
+
+static SSyncEntryStatis gSyncEntryStatis = {0};
+
+void syncEntryStatisPrint() {
+  int64_t nMsgNum = 0, nMsgSize = 0;
+  for (int32_t i = 0; i < TDMT_MAX_MSG_NUM_MIN; ++i) {
+    int64_t msgNum = atomic_load_64(&gSyncEntryStatis.msgNum[i]);
+    if (msgNum > 0) {
+      int64_t msgSize = atomic_load_64(&gSyncEntryStatis.msgSize[i]);
+      nMsgNum += msgNum;
+      nMsgSize += msgSize;
+      sInfo("prop:[%d] msgType:%s, num:%" PRId64 ", size:%" PRId64 ", avg:%" PRIi64, i, tMsgInfo[i], msgNum, msgSize,
+            msgSize / msgNum);
+    }
+  }
+  if (nMsgNum > 0) {
+    sInfo("prop:total, num:%" PRId64 ", size:%" PRId64 ", avg:%" PRIi64, nMsgNum, nMsgSize, nMsgSize / nMsgNum);
+  }
+}
+
+void syncEntryStatisInc(SSyncRaftEntry* pEntry) {
+  if (pEntry->from) {
+    atomic_fetch_add_64(&gSyncEntryStatis.msgNum[pEntry->originalRpcType], 1);
+    atomic_fetch_add_64(&gSyncEntryStatis.msgSize[pEntry->originalRpcType], pEntry->dataLen);
+  }
+}
+
+void syncEntryStatisDec(SSyncRaftEntry* pEntry) {
+  if (pEntry->from) {
+    atomic_fetch_sub_64(&gSyncEntryStatis.msgNum[pEntry->originalRpcType], 1);
+    atomic_fetch_sub_64(&gSyncEntryStatis.msgSize[pEntry->originalRpcType], pEntry->dataLen);
+  }
+}
+
 SSyncRaftEntry* syncEntryBuild(int32_t dataLen) {
   int32_t         bytes = sizeof(SSyncRaftEntry) + dataLen;
   SSyncRaftEntry* pEntry = taosMemoryCalloc(1, bytes);
@@ -48,6 +86,8 @@ SSyncRaftEntry* syncEntryBuildFromClientRequest(const SyncClientRequest* pMsg, S
   return pEntry;
 }
 
+static int64_t gSyncRaftRpcTs = 0;
+
 SSyncRaftEntry* syncEntryBuildFromRpcMsg(const SRpcMsg* pMsg, SyncTerm term, SyncIndex index) {
   SSyncRaftEntry* pEntry = syncEntryBuild(pMsg->contLen);
   if (pEntry == NULL) return NULL;
@@ -58,7 +98,20 @@ SSyncRaftEntry* syncEntryBuildFromRpcMsg(const SRpcMsg* pMsg, SyncTerm term, Syn
   pEntry->isWeak = 0;
   pEntry->term = term;
   pEntry->index = index;
+  pEntry->from = 1;
   memcpy(pEntry->data, pMsg->pCont, pMsg->contLen);
+
+  syncEntryStatisInc(pEntry);
+  if (gSyncRaftRpcTs == 0) {
+    gSyncRaftRpcTs = taosGetTimestampMs();
+  } else {
+    int64_t now = taosGetTimestampMs();
+    int64_t interval = now - gSyncRaftRpcTs;
+    if (interval > 5000) {
+      atomic_store_64(&gSyncRaftRpcTs, now);
+      syncEntryStatisPrint();
+    }
+  }
 
   return pEntry;
 }
@@ -95,6 +148,9 @@ SSyncRaftEntry* syncEntryBuildNoop(SyncTerm term, SyncIndex index, int32_t vgId)
 void syncEntryDestroy(SSyncRaftEntry* pEntry) {
   if (pEntry != NULL) {
     sTrace("free entry:%p", pEntry);
+    if(pEntry->from) {
+      syncEntryStatisDec(pEntry);
+    }
     taosMemoryFree(pEntry);
   }
 }
