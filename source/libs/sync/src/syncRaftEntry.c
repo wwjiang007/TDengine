@@ -18,23 +18,39 @@
 #include "syncUtil.h"
 #include "tref.h"
 
+
+extern char*   tMsgInfo[];
+extern int32_t tMsgDict[];
+extern int32_t tMsgRangeDict[];
+
+typedef uint16_t tmsg_t;
+
+#define TMSG_SEG_CODE(TYPE) (((TYPE)&0xff00) >> 8)
+#define TMSG_SEG_SEQ(TYPE)  ((TYPE)&0xff)
+#define TMSG_INDEX(TYPE)    (tMsgDict[TMSG_SEG_CODE(TYPE)] + TMSG_SEG_SEQ(TYPE))
+
+
+#define MSG_MAX_SIZE 2310
+
 typedef struct {
-  int64_t msgNum[TDMT_MAX_MSG_NUM_MIN];
-  int64_t msgSize[TDMT_MAX_MSG_NUM_MIN];
+  int32_t msgType[MSG_MAX_SIZE];
+  int64_t msgNum[MSG_MAX_SIZE];
+  int64_t msgSize[MSG_MAX_SIZE];
 } SSyncEntryStatis;
 
 static SSyncEntryStatis gSyncEntryStatis = {0};
 
 void syncEntryStatisPrint() {
   int64_t nMsgNum = 0, nMsgSize = 0;
-  for (int32_t i = 0; i < TDMT_MAX_MSG_NUM_MIN; ++i) {
+  for (int32_t i = 0; i < MSG_MAX_SIZE; ++i) {
     int64_t msgNum = atomic_load_64(&gSyncEntryStatis.msgNum[i]);
     if (msgNum > 0) {
       int64_t msgSize = atomic_load_64(&gSyncEntryStatis.msgSize[i]);
       nMsgNum += msgNum;
       nMsgSize += msgSize;
-      sInfo("prop:[%d] msgType:%s, num:%" PRId64 ", size:%" PRId64 ", avg:%" PRIi64, i, tMsgInfo[i], msgNum, msgSize,
-            msgSize / msgNum);
+      uint32_t msgType = atomic_load_32(&gSyncEntryStatis.msgType[i]);
+      sInfo("prop:[%d] msgType:%d:%s, originMsg:%d:%s, num:%" PRId64 ", size:%" PRId64 ", avg:%" PRIi64, i, msgType,
+            tMsgInfo[TMSG_INDEX(msgType)], i, tMsgInfo[TMSG_INDEX(i)], msgNum, msgSize, msgSize / msgNum);
     }
   }
   if (nMsgNum > 0) {
@@ -44,6 +60,10 @@ void syncEntryStatisPrint() {
 
 void syncEntryStatisInc(SSyncRaftEntry* pEntry) {
   if (pEntry->from) {
+    if(pEntry->msgType <= 0) {
+      assert(0);
+    }
+    atomic_store_32(&gSyncEntryStatis.msgType[pEntry->originalRpcType], pEntry->msgType);
     atomic_fetch_add_64(&gSyncEntryStatis.msgNum[pEntry->originalRpcType], 1);
     atomic_fetch_add_64(&gSyncEntryStatis.msgSize[pEntry->originalRpcType], pEntry->dataLen);
   }
@@ -51,6 +71,9 @@ void syncEntryStatisInc(SSyncRaftEntry* pEntry) {
 
 void syncEntryStatisDec(SSyncRaftEntry* pEntry) {
   if (pEntry->from) {
+    if(pEntry->msgType <= 0) {
+      assert(0);
+    }
     atomic_fetch_sub_64(&gSyncEntryStatis.msgNum[pEntry->originalRpcType], 1);
     atomic_fetch_sub_64(&gSyncEntryStatis.msgSize[pEntry->originalRpcType], pEntry->dataLen);
   }
@@ -100,6 +123,10 @@ SSyncRaftEntry* syncEntryBuildFromRpcMsg(const SRpcMsg* pMsg, SyncTerm term, Syn
   pEntry->index = index;
   pEntry->from = 1;
   memcpy(pEntry->data, pMsg->pCont, pMsg->contLen);
+
+  if(pEntry->originalRpcType == 21) {
+    sTrace("build entry:%p, msgType:%d", pEntry, (int32_t)pEntry->originalRpcType);
+  }
 
   syncEntryStatisInc(pEntry);
   if (gSyncRaftRpcTs == 0) {
