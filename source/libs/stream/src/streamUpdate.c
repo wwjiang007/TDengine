@@ -455,98 +455,70 @@ int32_t updateInfoSerialize(void* buf, int32_t bufLen, const SUpdateInfo* pInfo,
 
   SEncoder encoder = {0};
   tEncoderInit(&encoder, buf, bufLen);
-  if (tStartEncode(&encoder) != 0) {
-    code = TSDB_CODE_FAILED;
-    QUERY_CHECK_CODE(code, lino, _end);
-  }
+  code = tStartEncode(&encoder);
+  QUERY_CHECK_CODE(code, lino, _end);
 
   int32_t size = taosArrayGetSize(pInfo->pTsBuckets);
-  if (tEncodeI32(&encoder, size) < 0) {
-    code = TSDB_CODE_FAILED;
-    QUERY_CHECK_CODE(code, lino, _end);
-  }
+  code = tEncodeI32(&encoder, size);
+  QUERY_CHECK_CODE(code, lino, _end);
 
   for (int32_t i = 0; i < size; i++) {
     TSKEY* pTs = (TSKEY*)taosArrayGet(pInfo->pTsBuckets, i);
-    if (tEncodeI64(&encoder, *pTs) < 0) {
-      code = TSDB_CODE_FAILED;
-      QUERY_CHECK_CODE(code, lino, _end);
-    }
-  }
-
-  if (tEncodeU64(&encoder, pInfo->numBuckets) < 0) {
-    code = TSDB_CODE_FAILED;
+    code = tEncodeI64(&encoder, *pTs);
     QUERY_CHECK_CODE(code, lino, _end);
   }
+
+  code = tEncodeU64(&encoder, pInfo->numBuckets);
+  QUERY_CHECK_CODE(code, lino, _end);
 
   int32_t sBfSize = taosArrayGetSize(pInfo->pTsSBFs);
-  if (tEncodeI32(&encoder, sBfSize) < 0) {
-    code = TSDB_CODE_FAILED;
-    QUERY_CHECK_CODE(code, lino, _end);
-  }
+  code = tEncodeI32(&encoder, sBfSize);
+  QUERY_CHECK_CODE(code, lino, _end);
+
   for (int32_t i = 0; i < sBfSize; i++) {
     SScalableBf* pSBf = taosArrayGetP(pInfo->pTsSBFs, i);
-    if (tScalableBfEncode(pSBf, &encoder) < 0) {
-      code = TSDB_CODE_FAILED;
-      QUERY_CHECK_CODE(code, lino, _end);
-    }
-  }
-
-  if (tEncodeU64(&encoder, pInfo->numSBFs) < 0) {
-    code = TSDB_CODE_FAILED;
-    QUERY_CHECK_CODE(code, lino, _end);
-  }
-  if (tEncodeI64(&encoder, pInfo->interval) < 0) {
-    code = TSDB_CODE_FAILED;
-    QUERY_CHECK_CODE(code, lino, _end);
-  }
-  if (tEncodeI64(&encoder, pInfo->watermark) < 0) {
-    code = TSDB_CODE_FAILED;
-    QUERY_CHECK_CODE(code, lino, _end);
-  }
-  if (tEncodeI64(&encoder, pInfo->minTS) < 0) {
-    code = TSDB_CODE_FAILED;
+    code = tScalableBfEncode(pSBf, &encoder);
     QUERY_CHECK_CODE(code, lino, _end);
   }
 
-  if (tScalableBfEncode(pInfo->pCloseWinSBF, &encoder) < 0) {
-    code = TSDB_CODE_FAILED;
-    QUERY_CHECK_CODE(code, lino, _end);
-  }
+  code = tEncodeU64(&encoder, pInfo->numSBFs);
+  QUERY_CHECK_CODE(code, lino, _end);
+
+  code = tEncodeI64(&encoder, pInfo->interval);
+  QUERY_CHECK_CODE(code, lino, _end);
+
+  code = tEncodeI64(&encoder, pInfo->watermark);
+  QUERY_CHECK_CODE(code, lino, _end);
+
+  code = tEncodeI64(&encoder, pInfo->minTS);
+  QUERY_CHECK_CODE(code, lino, _end);
+
+  code = tScalableBfEncode(pInfo->pCloseWinSBF, &encoder);
+  QUERY_CHECK_CODE(code, lino, _end);
 
   int32_t mapSize = taosHashGetSize(pInfo->pMap);
-  if (tEncodeI32(&encoder, mapSize) < 0) {
-    code = TSDB_CODE_FAILED;
-    QUERY_CHECK_CODE(code, lino, _end);
-  }
+  code = tEncodeI32(&encoder, mapSize);
+  QUERY_CHECK_CODE(code, lino, _end);
+
   void*  pIte = NULL;
   size_t keyLen = 0;
   while ((pIte = taosHashIterate(pInfo->pMap, pIte)) != NULL) {
     void* key = taosHashGetKey(pIte, &keyLen);
-    if (tEncodeU64(&encoder, *(uint64_t*)key) < 0) {
-      code = TSDB_CODE_FAILED;
-      QUERY_CHECK_CODE(code, lino, _end);
-    }
+    code = tEncodeU64(&encoder, *(uint64_t*)key);
+    QUERY_CHECK_CODE(code, lino, _end);
     int32_t valueSize = taosHashGetValueSize(pIte);
-    if (tEncodeBinary(&encoder, (const uint8_t*)pIte, valueSize) < 0) {
-      code = TSDB_CODE_FAILED;
-      QUERY_CHECK_CODE(code, lino, _end);
-    }
-  }
-
-  if (tEncodeU64(&encoder, pInfo->maxDataVersion) < 0) {
-    code = TSDB_CODE_FAILED;
+    code = tEncodeBinary(&encoder, (const uint8_t*)pIte, valueSize);
     QUERY_CHECK_CODE(code, lino, _end);
   }
 
-  if (tEncodeI32(&encoder, pInfo->pkColLen) < 0) {
-    code = TSDB_CODE_FAILED;
-    QUERY_CHECK_CODE(code, lino, _end);
-  }
-  if (tEncodeI8(&encoder, pInfo->pkColType) < 0) {
-    code = TSDB_CODE_FAILED;
-    QUERY_CHECK_CODE(code, lino, _end);
-  }
+  code = tEncodeU64(&encoder, pInfo->maxDataVersion);
+  QUERY_CHECK_CODE(code, lino, _end);
+
+  code = tEncodeI32(&encoder, pInfo->pkColLen);
+  QUERY_CHECK_CODE(code, lino, _end);
+
+  code = tEncodeI8(&encoder, pInfo->pkColType);
+  QUERY_CHECK_CODE(code, lino, _end);
 
   tEndEncode(&encoder);
 
