@@ -28,6 +28,8 @@
 #include "syncRaftCfg.h"
 #include "syncVoteMgr.h"
 
+int64_t tsLogBufferMemoryUsed = 0;  // total bytes of vnode log buffer
+
 static bool syncIsMsgBlock(tmsg_t type) {
   return (type == TDMT_VND_CREATE_TABLE) || (type == TDMT_VND_ALTER_TABLE) || (type == TDMT_VND_DROP_TABLE) ||
          (type == TDMT_VND_UPDATE_TAG_VAL) || (type == TDMT_VND_ALTER_CONFIRM);
@@ -84,6 +86,14 @@ int32_t syncLogBufferAppend(SSyncLogBuffer* pBuf, SSyncNode* pNode, SSyncRaftEnt
   SSyncLogBufEntry tmp = {.pItem = pEntry, .prevLogIndex = pMatch->index, .prevLogTerm = pMatch->term};
   pBuf->entries[index % pBuf->size] = tmp;
   pBuf->endIndex = index + 1;
+  if (pNode->vgId > 1) {
+    pBuf->bytes += pEntry->bytes;
+    int64_t origin = atomic_load_64(&tsLogBufferMemoryUsed);
+    assert(origin >= 0);
+    int64_t result = atomic_add_fetch_64(&tsLogBufferMemoryUsed, (int64_t)pEntry->bytes);
+    assert(result > 0);
+    assert(pBuf->bytes <= result);
+  }
 
   syncLogBufferValidate(pBuf);
   taosThreadMutexUnlock(&pBuf->mutex);
@@ -215,6 +225,14 @@ int32_t syncLogBufferInitWithoutLock(SSyncLogBuffer* pBuf, SSyncNode* pNode) {
       SSyncLogBufEntry tmp = {.pItem = pEntry, .prevLogIndex = -1, .prevLogTerm = -1};
       pBuf->entries[index % pBuf->size] = tmp;
       taken = true;
+      if(pNode->vgId > 1) {
+        pBuf->bytes += pEntry->bytes;
+        int64_t origin = atomic_load_64(&tsLogBufferMemoryUsed);
+        assert(origin >= 0);
+        int64_t result = atomic_add_fetch_64(&tsLogBufferMemoryUsed, (int64_t)pEntry->bytes);
+        assert(result > 0);
+        assert(pBuf->bytes <= result);
+      }
     }
 
     if (index < toIndex) {
@@ -242,6 +260,14 @@ int32_t syncLogBufferInitWithoutLock(SSyncLogBuffer* pBuf, SSyncNode* pNode) {
     }
     SSyncLogBufEntry tmp = {.pItem = pDummy, .prevLogIndex = commitIndex - 1, .prevLogTerm = commitTerm};
     pBuf->entries[(commitIndex + pBuf->size) % pBuf->size] = tmp;
+    if(pNode->vgId > 1) {
+      pBuf->bytes += pDummy->bytes;
+      int64_t origin = atomic_load_64(&tsLogBufferMemoryUsed);
+      assert(origin >= 0);
+      int64_t result = atomic_add_fetch_64(&tsLogBufferMemoryUsed, (int64_t)pDummy->bytes);
+      assert(result > 0);
+      assert(pBuf->bytes <= result);
+    }
 
     if (index < toIndex) {
       pBuf->entries[(index + 1) % pBuf->size].prevLogIndex = commitIndex;
@@ -283,6 +309,8 @@ int32_t syncLogBufferReInit(SSyncLogBuffer* pBuf, SSyncNode* pNode) {
     memset(&pBuf->entries[(index + pBuf->size) % pBuf->size], 0, sizeof(pBuf->entries[0]));
   }
   pBuf->startIndex = pBuf->commitIndex = pBuf->matchIndex = pBuf->endIndex = 0;
+  pBuf->bytes = 0;
+
   int32_t ret = syncLogBufferInitWithoutLock(pBuf, pNode);
   if (ret < 0) {
     sError("vgId:%d, failed to re-initialize sync log buffer since %s.", pNode->vgId, terrstr());
@@ -384,6 +412,13 @@ int32_t syncLogBufferAccept(SSyncLogBuffer* pBuf, SSyncNode* pNode, SSyncRaftEnt
   ASSERT(index - pBuf->startIndex < pBuf->size);
   ASSERT(pBuf->entries[index % pBuf->size].pItem == NULL);
   SSyncLogBufEntry tmp = {.pItem = pEntry, .prevLogIndex = prevIndex, .prevLogTerm = prevTerm};
+  if(pNode->vgId > 1) {
+    pBuf->bytes +=  pEntry->bytes;
+    int64_t origin = atomic_load_64(&tsLogBufferMemoryUsed);
+    int64_t result = atomic_add_fetch_64(&tsLogBufferMemoryUsed, (int64_t)pEntry->bytes);
+    assert(result > 0);
+    assert(pBuf->bytes <= result);
+  }
   pEntry = NULL;
   pBuf->entries[index % pBuf->size] = tmp;
 
@@ -596,7 +631,9 @@ int32_t syncLogBufferValidate(SSyncLogBuffer* pBuf) {
 }
 
 int32_t syncLogBufferCommit(SSyncLogBuffer* pBuf, SSyncNode* pNode, int64_t commitIndex) {
+  int64_t tsEntryBeforeLock = taosGetTimestampMs();
   taosThreadMutexLock(&pBuf->mutex);
+  int64_t tsEntryAfterLock = taosGetTimestampMs();
   syncLogBufferValidate(pBuf);
 
   SSyncLogStore*  pLogStore = pNode->pLogStore;
@@ -612,13 +649,13 @@ int32_t syncLogBufferCommit(SSyncLogBuffer* pBuf, SSyncNode* pNode, int64_t comm
   bool            nextInBuf = false;
 
   if (commitIndex <= pBuf->commitIndex) {
-    sDebug("vgId:%d, stale commit index. current:%" PRId64 ", notified:%" PRId64 "", vgId, pBuf->commitIndex,
+    sInfo("prop:vgId:%d, stale commit index. current:%" PRId64 ", notified:%" PRId64 "", vgId, pBuf->commitIndex,
            commitIndex);
     ret = 0;
     goto _out;
   }
 
-  sTrace("vgId:%d, commit. log buffer: [%" PRId64 " %" PRId64 " %" PRId64 ", %" PRId64 "), role:%d, term:%" PRId64,
+  sInfo("prop:vgId:%d, commit. log buffer: [%" PRId64 " %" PRId64 " %" PRId64 ", %" PRId64 "), role:%d, term:%" PRId64,
          pNode->vgId, pBuf->startIndex, pBuf->commitIndex, pBuf->matchIndex, pBuf->endIndex, role, currentTerm);
 
   // execute in fsm
@@ -628,6 +665,13 @@ int32_t syncLogBufferCommit(SSyncLogBuffer* pBuf, SSyncNode* pNode, int64_t comm
     if (pEntry == NULL) {
       goto _out;
     }
+
+    sInfo("prop:vgId:%d, syncLogBufferCommit entry. msg:%s, index:%" PRId64 ", startIndex:%" PRId64
+          ", commitIndex:%" PRId64 ", endIndex:%" PRId64 ", term:%" PRId64 ", bytes:%u, left:%" PRId64 "used:%" PRId64
+          ", allowed:%" PRId64,
+          pNode->vgId, TMSG_INFO(pEntry->originalRpcType), pEntry->index, pBuf->startIndex, pBuf->commitIndex,
+          pBuf->endIndex, pEntry->term, pEntry->bytes, pBuf->bytes, atomic_load_64(&tsLogBufferMemoryUsed),
+          tsLogBufferMemoryAllowed);
 
     // execute it
     if (!syncUtilUserCommit(pEntry->originalRpcType)) {
@@ -694,14 +738,36 @@ int32_t syncLogBufferCommit(SSyncLogBuffer* pBuf, SSyncNode* pNode, int64_t comm
   }
 
   // recycle
+  bool      isVnode = pNode->vgId > 1;
   SyncIndex until = pBuf->commitIndex - TSDB_SYNC_LOG_BUFFER_RETENTION;
-  for (SyncIndex index = pBuf->startIndex; index < until; index++) {
-    SSyncRaftEntry* pEntry = pBuf->entries[(index + pBuf->size) % pBuf->size].pItem;
-    ASSERT(pEntry != NULL);
+  do {
+    if ((pBuf->startIndex >= pBuf->commitIndex) ||
+        !((pBuf->startIndex < until) || (isVnode && pBuf->bytes >= TSDB_SYNC_LOG_BUFFER_THRESHOLD &&
+                                         atomic_load_64(&tsLogBufferMemoryUsed) >= tsLogBufferMemoryAllowed))) {
+      break;
+    }
+    SSyncRaftEntry* pEntry = pBuf->entries[(pBuf->startIndex + pBuf->size) % pBuf->size].pItem;
+    if (pEntry == NULL) {
+      sError("prop:vgId:%d, invalid log entry to recycle. index:%" PRId64 ", startIndex:%" PRId64 ", until:%" PRId64
+             ", commitIndex:%" PRId64 ", endIndex:%" PRId64 ", term:%" PRId64,
+             pNode->vgId, pEntry->index, pBuf->startIndex, until, pBuf->commitIndex, pBuf->endIndex, pEntry->term);
+      return TSDB_CODE_SYN_INTERNAL_ERROR;
+    }
+    if (isVnode) {
+      pBuf->bytes -= pEntry->bytes;
+      atomic_sub_fetch_64(&tsLogBufferMemoryUsed, (int64_t)pEntry->bytes);
+      assert(atomic_load_64(&tsLogBufferMemoryUsed) >= 0);
+      assert(pBuf->bytes <= atomic_load_64(&tsLogBufferMemoryUsed));
+    }
+    sInfo("prop:vgId:%d, recycle log entry. index:%" PRId64 ", startIndex:%" PRId64 ", until:%" PRId64
+           ", commitIndex:%" PRId64 ", endIndex:%" PRId64 ", term:%" PRId64 ", entry bytes:%u, buf bytes:%" PRId64
+           ", total bytes:%" PRId64,
+           pNode->vgId, pEntry->index, pBuf->startIndex, until, pBuf->commitIndex, pBuf->endIndex, pEntry->term,
+           pEntry->bytes, pBuf->bytes, atomic_load_64(&tsLogBufferMemoryUsed));
     syncEntryDestroy(pEntry);
-    memset(&pBuf->entries[(index + pBuf->size) % pBuf->size], 0, sizeof(pBuf->entries[0]));
-    pBuf->startIndex = index + 1;
-  }
+    (void)memset(&pBuf->entries[(pBuf->startIndex + pBuf->size) % pBuf->size], 0, sizeof(pBuf->entries[0]));
+    ++pBuf->startIndex;
+  } while (true);
 
   ret = 0;
 _out:
@@ -724,6 +790,9 @@ _out:
   }
   syncLogBufferValidate(pBuf);
   taosThreadMutexUnlock(&pBuf->mutex);
+  int64_t tsEntryUnLock = taosGetTimestampMs();
+  sInfo("prop:vgId:%d, syncLogBufferCommit. commit index:%" PRId64 ", role:%d, term:%" PRId64 ", cost:%" PRId64 "ms, lock:%" PRId64 "ms",
+        pNode->vgId, pBuf->commitIndex, role, currentTerm, tsEntryUnLock - tsEntryBeforeLock, tsEntryAfterLock - tsEntryBeforeLock);
   return ret;
 }
 
@@ -1155,6 +1224,7 @@ void syncLogBufferClear(SSyncLogBuffer* pBuf) {
     memset(&pBuf->entries[(index + pBuf->size) % pBuf->size], 0, sizeof(pBuf->entries[0]));
   }
   pBuf->startIndex = pBuf->commitIndex = pBuf->matchIndex = pBuf->endIndex = 0;
+  pBuf->bytes = 0;
   taosThreadMutexUnlock(&pBuf->mutex);
 }
 

@@ -21,9 +21,11 @@ extern "C" {
 #endif
 
 #include "sync.h"
-#include "taosdef.h"
+#include "tglobal.h"
 #include "trpc.h"
 #include "ttimer.h"
+#include "osTime.h"
+
 
 typedef struct SyncTimeout            SyncTimeout;
 typedef struct SyncClientRequest      SyncClientRequest;
