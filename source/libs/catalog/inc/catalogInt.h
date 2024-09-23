@@ -212,6 +212,10 @@ typedef struct SCtgTbNamesCtx {
   SArray*  pNames;
   SArray*  pResList;
   SArray*  pFetchs;
+
+  // check whether tsma exits
+  SArray*   pTbFNames;     // tbFName for stb/ntb
+  SHashObj* pTbTsmaCache;  // key: tbFName, value: 0 or 1
 } SCtgTbNamesCtx;
 
 typedef struct SCtgTbIndexCtx {

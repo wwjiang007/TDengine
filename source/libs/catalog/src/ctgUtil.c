@@ -1035,17 +1035,26 @@ void ctgFreeTaskCtx(SCtgTask* pTask) {
     }
     case CTG_TASK_GET_TB_NAME: {
       SCtgTbNamesCtx* taskCtx = (SCtgTbNamesCtx*)pTask->taskCtx;
-      taosArrayDestroyEx(taskCtx->pResList, ctgFreeBatchMeta);
-      taosArrayDestroy(taskCtx->pFetchs);
-      // NO NEED TO FREE pNames
+      if (taskCtx) {
+        taosArrayDestroyEx(taskCtx->pResList, ctgFreeBatchMeta);
+        taskCtx->pResList = NULL;
+        taosArrayDestroy(taskCtx->pFetchs);
+        taskCtx->pFetchs = NULL;
+        // NO NEED TO FREE pNames
 
-      taosArrayDestroyEx(pTask->msgCtxs, (FDelete)ctgFreeTbMetasMsgCtx);
+        taosArrayDestroyEx(pTask->msgCtxs, (FDelete)ctgFreeTbMetasMsgCtx);
 
-      if (pTask->msgCtx.lastOut) {
-        ctgFreeSTableMetaOutput((STableMetaOutput*)pTask->msgCtx.lastOut);
-        pTask->msgCtx.lastOut = NULL;
+        if (pTask->msgCtx.lastOut) {
+          ctgFreeSTableMetaOutput((STableMetaOutput*)pTask->msgCtx.lastOut);
+          pTask->msgCtx.lastOut = NULL;
+        }
+        taosArrayDestroy(taskCtx->pTbFNames);
+        taskCtx->pTbFNames = NULL;
+        taosHashCleanup(taskCtx->pTbTsmaCache);
+        taskCtx->pTbTsmaCache = NULL;
+        taosMemoryFreeClear(pTask->taskCtx);
+        pTask->taskCtx = NULL;
       }
-      taosMemoryFreeClear(pTask->taskCtx);
       break;
     }
     default:

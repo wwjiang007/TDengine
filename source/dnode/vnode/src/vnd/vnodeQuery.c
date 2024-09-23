@@ -87,6 +87,7 @@ int32_t vnodeGetTableMeta(SVnode *pVnode, SRpcMsg *pMsg, bool direct) {
   if (reqTbUid) {
     errno = 0;
     uint64_t tbUid = taosStr2UInt64(infoReq.tbName, NULL, 10);
+    
     if (errno == ERANGE || tbUid == 0) {
       code = TSDB_CODE_TDB_TABLE_NOT_EXIST;
       goto _exit3;
