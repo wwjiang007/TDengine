@@ -25,42 +25,47 @@ static bool overlapWithDelSkylineWithoutVer(STableBlockScanInfo* pBlockScanInfo,
                                             int32_t order);
 
 static int32_t initBlockScanInfoBuf(SBlockInfoBuf* pBuf, int32_t numOfTables) {
-  int32_t num = numOfTables / pBuf->numPerBucket;
-  int32_t remainder = numOfTables % pBuf->numPerBucket;
+  int32_t              code = TSDB_CODE_SUCCESS;
+  int32_t              lino = 0;
+  int32_t              num = 0;
+  int32_t              remainder = 0;
+  STableBlockScanInfo* p = NULL;
+
+  TSDB_CHECK_CONDITION(pBuf->numPerBucket > 0, code, lino, _end, TSDB_CODE_INTERNAL_ERROR);
+  num = numOfTables / pBuf->numPerBucket;
+  remainder = numOfTables % pBuf->numPerBucket;
 
   if (pBuf->pData == NULL) {
     pBuf->pData = taosArrayInit(num + 1, POINTER_BYTES);
-    if (pBuf->pData == NULL) {
-      return terrno;
-    }
   }
+  TSDB_CHECK_NULL(pBuf->pData, code, lino, _end, terrno);
 
   for (int32_t i = 0; i < num; ++i) {
-    char* p = taosMemoryCalloc(pBuf->numPerBucket, sizeof(STableBlockScanInfo));
-    if (p == NULL) {
-      return terrno;
-    }
+    p = taosMemoryCalloc(pBuf->numPerBucket, sizeof(STableBlockScanInfo));
+    TSDB_CHECK_NULL(p, code, lino, _end, terrno);
 
     void* px = taosArrayPush(pBuf->pData, &p);
-    if (px == NULL) {
-      return terrno;
-    }
+    TSDB_CHECK_NULL(px, code, lino, _end, terrno);
   }
 
   if (remainder > 0) {
-    char* p = taosMemoryCalloc(remainder, sizeof(STableBlockScanInfo));
-    if (p == NULL) {
-      return terrno;
-    }
+    p = taosMemoryCalloc(remainder, sizeof(STableBlockScanInfo));
+    TSDB_CHECK_NULL(p, code, lino, _end, terrno);
+
     void* px = taosArrayPush(pBuf->pData, &p);
-    if (px == NULL) {
-      return terrno;
-    }
+    TSDB_CHECK_NULL(px, code, lino, _end, terrno);
   }
 
   pBuf->numOfTables = numOfTables;
 
-  return TSDB_CODE_SUCCESS;
+_end:
+  if (code != TSDB_CODE_SUCCESS) {
+    tsdbError("%s failed at line %d since %s", __func__, lino, tstrerror(code));
+    if (p) {
+      taosMemoryFree(p);
+    }
+  }
+  return code;
 }
 
 int32_t uidComparFunc(const void* p1, const void* p2) {
