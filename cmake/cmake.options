@@ -9,84 +9,82 @@ option(
 )
 
 IF(${TD_WINDOWS})
-
-    MESSAGE("build pthread Win32")
+    message("build pthread Win32")
     option(
-            BUILD_PTHREAD
-            "If build pthread on Windows"
-            ON
-          )
-
-    MESSAGE("build gnu regex for Windows")
-    option(
-            BUILD_GNUREGEX
-            "If build gnu regex on Windows"
-            ON
-          )
-
-    MESSAGE("build iconv Win32")
-    option(
-            BUILD_WITH_ICONV
-            "If build iconv on Windows"
-            ON
-          )
-
-    MESSAGE("build msvcregex Win32")
-    option(
-            BUILD_MSVCREGEX
-            "If build msvcregex on Windows"
-            ON
-          )
-
-    MESSAGE("build wcwidth Win32")
-    option(
-            BUILD_WCWIDTH
-            "If build wcwidth on Windows"
-            ON
-          )
-
-    MESSAGE("build wingetopt Win32")
-    option(
-            BUILD_WINGETOPT
-                "If build wingetopt on Windows"
-            ON
-        )
-
-    option(
-            TDENGINE_3
-            "TDengine 3.x for taos-tools"
-            ON
-        )
-
-    option(
-            BUILD_CRASHDUMP
-            "If build crashdump on Windows"
-            ON
-        )
-
-ELSEIF (TD_DARWIN_64)
-    IF(${BUILD_TEST})
-        add_definitions(-DCOMPILER_SUPPORTS_CXX13)
-    ENDIF ()
-ENDIF ()
-
-option(
-        BUILD_GEOS
-        "If build with geos"
+        BUILD_PTHREAD
+        "If build pthread on Windows"
         ON
     )
+
+    message("build gnu regex for Windows")
+    option(
+        BUILD_GNUREGEX
+        "If build gnu regex on Windows"
+        ON
+    )
+
+    message("build iconv Win32")
+    option(
+        BUILD_WITH_ICONV
+        "If build iconv on Windows"
+        ON
+    )
+
+    message("build msvcregex Win32")
+    option(
+        BUILD_MSVCREGEX
+        "If build msvcregex on Windows"
+        ON
+    )
+
+    message("build wcwidth Win32")
+    option(
+        BUILD_WCWIDTH
+        "If build wcwidth on Windows"
+        ON
+    )
+
+    message("build wingetopt Win32")
+    option(
+        BUILD_WINGETOPT
+        "If build wingetopt on Windows"
+        ON
+    )
+
+    option(
+        TDENGINE_3
+        "TDengine 3.x for taos-tools"
+        ON
+    )
+
+    option(
+        BUILD_CRASHDUMP
+        "If build crashdump on Windows"
+        ON
+    )
+ELSEIF(TD_DARWIN_64)
+    IF(${BUILD_TEST})
+        add_definitions(-DCOMPILER_SUPPORTS_CXX13)
+    ENDIF()
+ENDIF()
+
+option(
+    BUILD_GEOS
+    "If build with geos"
+    ON
+)
 
 option(
     BUILD_SHARED_LIBS
     ""
     OFF
-    )
+)
 
 option(
     RUST_BINDINGS
     "If build with rust-bindings"
     ON
-    )
+)
 
 option(
     BUILD_PCRE2
@@ -98,19 +96,19 @@ option(
     JEMALLOC_ENABLED
     "If build with jemalloc"
     OFF
-    )
+)
 
 option(
     BUILD_SANITIZER
     "If build sanitizer"
     OFF
-    )
+)
 
 option(
     BUILD_ADDR2LINE
     "If build addr2line"
     OFF
-    )
+)
 
 option(
     BUILD_WITH_LEVELDB
@@ -124,55 +122,56 @@ option(
     ON
 )
 
+option(
+    BUILD_WITH_ANALYSIS
+    "If build with analysis"
+    ON
+)
+
 IF(${TD_LINUX})
+    option(
+        BUILD_S3
+        "If build with s3"
+        ON
+    )
 
-option(
-    BUILD_S3
-    "If build with s3"
-    ON
-)
+    option(
+        BUILD_WITH_S3
+        "If build with s3"
+        ON
+    )
 
-option(
-    BUILD_WITH_S3
-    "If build with s3"
-    ON
-)
-
-option(
-    BUILD_WITH_COS
-    "If build with cos"
-    OFF
-)
-
-ENDIF ()
+    option(
+        BUILD_WITH_COS
+        "If build with cos"
+        OFF
+    )
+ENDIF()
 
 IF(NOT TD_ENTERPRISE)
-MESSAGE("switch s3 off with community version")
-set(BUILD_S3 ON)
-set(BUILD_WITH_S3 ON)
-set(BUILD_WITH_COS OFF)
-ENDIF ()
+    message("switch s3 off with community version")
+    set(BUILD_S3 ON)
+    set(BUILD_WITH_S3 ON)
+    set(BUILD_WITH_COS OFF)
+ENDIF()
+
+IF(${BUILD_WITH_ANALYSIS})
+    message("build with analysis")
+    set(BUILD_S3 ON)
+    set(BUILD_WITH_S3 ON)
+ENDIF()
 
 IF(${BUILD_S3})
-
-IF(${BUILD_WITH_S3})
-
-add_definitions(-DUSE_S3)
-option(BUILD_WITH_COS "If build with cos" OFF)
-
-ELSE ()
-
-option(BUILD_WITH_COS "If build with cos" ON)
-
-ENDIF ()
-
-ELSE ()
-
-option(BUILD_WITH_S3 "If build with s3" OFF)
-
-option(BUILD_WITH_COS "If build with cos" OFF)
-
-ENDIF ()
+    IF(${BUILD_WITH_S3})
+        add_definitions(-DUSE_S3)
+        option(BUILD_WITH_COS "If build with cos" OFF)
+    ELSE()
+        option(BUILD_WITH_COS "If build with cos" ON)
+    ENDIF()
+ELSE()
+    option(BUILD_WITH_S3 "If build with s3" OFF)
+    option(BUILD_WITH_COS "If build with cos" OFF)
+ENDIF()
 
 option(
     BUILD_WITH_SQLITE
@@ -191,7 +190,6 @@ option(
     "If build with lucene"
     off
 )
-
 
 option(
     BUILD_WITH_NURAFT
@@ -212,14 +210,12 @@ option(
 )
 
 IF(${TD_LINUX} MATCHES TRUE)
-
-option(
-    BUILD_DEPENDENCY_TESTS
-    "If build dependency tests"
-    ON
-)
-
-ENDIF ()
+    option(
+        BUILD_DEPENDENCY_TESTS
+        "If build dependency tests"
+        ON
+    )
+ENDIF()
 
 option(
     BUILD_DOCS
@@ -228,19 +224,19 @@ option(
 )
 
 option(
-   BUILD_WITH_INVERTEDINDEX
-   "If use invertedIndex"
-   ON
+    BUILD_WITH_INVERTEDINDEX
+    "If use invertedIndex"
+    ON
 )
 
 option(
-   BUILD_RELEASE
-   "If build release version"
-   OFF
+    BUILD_RELEASE
+    "If build release version"
+    OFF
 )
 
 option(
-   BUILD_CONTRIB
-   "If build thirdpart from source"
-   OFF
+    BUILD_CONTRIB
+    "If build thirdpart from source"
+    OFF
 )
