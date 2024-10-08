@@ -2584,6 +2584,7 @@ static int32_t translateForecastFunc(STranslateContext* pCxt, SFunctionNode* pFu
   if (!isSelectStmt(pCxt->pCurrStmt) || SQL_CLAUSE_SELECT != pCxt->currClause) {
     return generateSyntaxErrMsg(&pCxt->msgBuf, TSDB_CODE_PAR_NOT_ALLOWED_FUNC);
   }
+
   SSelectStmt* pSelect = (SSelectStmt*)pCxt->pCurrStmt;
   SNode*       pTable = pSelect->pFromTable;
 
@@ -2625,6 +2626,7 @@ static int32_t translateForecastPseudoColumnFunc(STranslateContext* pCxt, SNode*
   SSelectStmt* pSelect = (SSelectStmt*)pCxt->pCurrStmt;
   SNode*       pNode = NULL;
   bool         bFound = false;
+
   FOREACH(pNode, pSelect->pProjectionList) {
     if (nodeType(pNode) == QUERY_NODE_FUNCTION && strcasecmp(((SFunctionNode*)pNode)->functionName, "forecast") == 0) {
       bFound = true;
