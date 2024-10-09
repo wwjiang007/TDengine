@@ -808,7 +808,7 @@ static int32_t mndProcessCreateStreamReq(SRpcMsg *pReq) {
   SDbObj *pSourceDb = mndAcquireDb(pMnode, createReq.sourceDB);
   if (pSourceDb == NULL) {
     code = terrno;
-    mInfo("stream:%s failed to create, acquire source db %s failed, code:%s", createReq.name, createReq.sourceDB,
+    mError("stream:%s failed to create, acquire source db %s failed, code:%s", createReq.name, createReq.sourceDB,
           tstrerror(code));
     goto _OVER;
   }
