@@ -84,6 +84,7 @@ void* taosObjectPoolAlloc(SObjectPool *pool) {
       if ((pool->bitmap[i] & (1 << j)) == 0) {
         pool->bitmap[i] |= (1 << j);
         pObject = (char *)pool->objects + (i * 32 + j) * pool->objectSize;
+        break;
       }
     }
   }
