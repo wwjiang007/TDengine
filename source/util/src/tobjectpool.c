@@ -70,8 +70,6 @@ void* taosObjectPoolAlloc(SObjectPool *pool) {
     return NULL;
   }
 
-  void* pObject = NULL;
-
   // (void)taosThreadMutexLock(&pool->mutex);
 
   size_t bitMapCap = (pool->capacity + 31) / 32;
@@ -82,20 +80,19 @@ void* taosObjectPoolAlloc(SObjectPool *pool) {
 
     for (size_t j = 0; j < 32; ++j) {
       if ((i * 32 + j) >= pool->capacity) {
-        break;
+        return NULL;
       }
 
       if ((pool->bitmap[i] & (1 << j)) == 0) {
         pool->bitmap[i] |= (1 << j);
-        pObject = (char *)pool->objects + (i * 32 + j) * pool->objectSize;
-        break;
+        return (char *)pool->objects + (i * 32 + j) * pool->objectSize;
       }
     }
   }
 
   // (void)taosThreadMutexLock(&pool->mutex);
 
-  return pObject;
+  return NULL;
 }
 
 void taosObjectPoolFree(SObjectPool *pool, void *object) {
