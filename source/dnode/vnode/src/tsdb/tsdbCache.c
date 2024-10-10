@@ -575,10 +575,10 @@ void tsdbCacheFreeSLastColItem(void *pItem) {
 
 static void tsdbCacheDeleter(const void *key, size_t klen, void *value, void *ud) {
   SLastCol *pLastCol = (SLastCol *)value;
+  STsdb *pTsdb = (STsdb *)ud;
 
   if (pLastCol->dirty) {
     if (tsdbCacheFlushDirty(key, klen, pLastCol, ud) != 0) {
-      STsdb *pTsdb = (STsdb *)ud;
       tsdbError("tsdb/cache: vgId:%d, flush cache %s failed at line %d.", TD_VID(pTsdb->pVnode), __func__, __LINE__);
     }
   }
@@ -594,7 +594,7 @@ static void tsdbCacheDeleter(const void *key, size_t klen, void *value, void *ud
     taosMemoryFree(pLastCol->colVal.value.pData);
   }
 
-  taosMemoryFree(value);
+  taosObjectPoolFree(pTsdb->objectPool, value);
 }
 
 static void tsdbCacheOverWriter(const void *key, size_t klen, void *value, void *ud) {
@@ -1110,7 +1110,7 @@ static int32_t tsdbCachePutToRocksdb(STsdb *pTsdb, SLastKey *pLastKey, SLastCol 
 static int32_t tsdbCachePutToLRU(STsdb *pTsdb, SLastKey *pLastKey, SLastCol *pLastCol, int8_t dirty) {
   int32_t code = 0, lino = 0;
 
-  SLastCol *pLRULastCol = taosMemoryCalloc(1, sizeof(SLastCol));
+  SLastCol *pLRULastCol = taosObjectPoolAlloc(pTsdb->objectPool);
   if (!pLRULastCol) {
     return terrno;
   }
@@ -1130,7 +1130,7 @@ static int32_t tsdbCachePutToLRU(STsdb *pTsdb, SLastKey *pLastKey, SLastCol *pLa
 
 _exit:
   if (TSDB_CODE_SUCCESS != code) {
-    taosMemoryFree(pLRULastCol);
+    taosObjectPoolFree(pTsdb->objectPool, pLRULastCol);
     tsdbError("tsdb/cache/putlru: vgId:%d, failed at line %d since %s.", TD_VID(pTsdb->pVnode), lino, tstrerror(code));
   }
 
@@ -2040,6 +2040,11 @@ int32_t tsdbOpenCache(STsdb *pTsdb) {
     TAOS_CHECK_GOTO(TSDB_CODE_OUT_OF_MEMORY, &lino, _err);
   }
 
+  SObjectPool *pPool = taosObjectPoolInit(cfgCapacity / sizeof(SLastCol), sizeof(SLastCol));
+  if (pPool == NULL) {
+    TAOS_CHECK_GOTO(TSDB_CODE_OUT_OF_MEMORY, &lino, _err);
+  }
+
   TAOS_CHECK_GOTO(tsdbOpenBCache(pTsdb), &lino, _err);
 
   TAOS_CHECK_GOTO(tsdbOpenPgCache(pTsdb), &lino, _err);
@@ -2056,6 +2061,7 @@ _err:
   }
 
   pTsdb->lruCache = pCache;
+  pTsdb->objectPool = pPool;
 
   TAOS_RETURN(code);
 }
@@ -2068,6 +2074,10 @@ void tsdbCloseCache(STsdb *pTsdb) {
     taosLRUCacheCleanup(pCache);
 
     (void)taosThreadMutexDestroy(&pTsdb->lruMutex);
+  }
+
+  if (pTsdb->objectPool) {
+    taosObjectPoolDestroy(pTsdb->objectPool);
   }
 
   tsdbCloseBCache(pTsdb);

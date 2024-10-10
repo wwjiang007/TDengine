@@ -36,6 +36,7 @@
 #include "tlockfree.h"
 #include "tlosertree.h"
 #include "tlrucache.h"
+#include "tobjectpool.h"
 #include "tmsgcb.h"
 #include "trbtree.h"
 #include "tref.h"

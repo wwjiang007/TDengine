@@ -363,6 +363,7 @@ struct STsdb {
   STsdbFS              fs;  // old
   SLRUCache           *lruCache;
   TdThreadMutex        lruMutex;
+  SObjectPool         *objectPool;
   SLRUCache           *biCache;
   TdThreadMutex        biMutex;
   SLRUCache           *bCache;
